@@ -1,0 +1,5 @@
+duckdb>=0.9
+pandas>=2.0
+
+[dev]
+pytest>=7.0

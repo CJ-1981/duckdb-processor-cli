@@ -1,0 +1,9 @@
+id,status,amount,region,timestamp
+1,active,5000,North,2024-01-15
+2,inactive,3000,South,2024-01-16
+3,active,12000,East,2024-01-17
+4,active,800,North,2024-01-18
+5,active,15000,West,2024-01-19
+6,active,9500,South,2024-01-20
+7,inactive,200,East,2024-01-21
+8,active,7000,North,2024-01-22
