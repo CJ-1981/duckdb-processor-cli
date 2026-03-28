@@ -21,12 +21,19 @@ class DemoAnalysis(BaseAnalyzer):
     description = "Built-in demo: coverage, filtering, aggregation, and pivot"
 
     def run(self, p):
-        """Execute the full demo sequence."""
+        """Execute the full demo sequence using configured formatter."""
+        # Helper function to format with fallback
+        def format_result(df):
+            if p.formatter:
+                p.formatter.format_dataframe(df)
+            else:
+                print(df.to_string(index=False))
+
         print("\n── Key coverage ──────────────────────────────────")
-        print(p.coverage().to_string(index=False))
+        format_result(p.coverage())
 
         print("\n── Preview ───────────────────────────────────────")
-        print(p.preview(5).to_string(index=False))
+        format_result(p.preview(5))
 
         print("\n── Add derived column: tier ──────────────────────")
         p.add_column(
@@ -45,16 +52,16 @@ class DemoAnalysis(BaseAnalyzer):
         filtered = p.filter(
             "status = 'active' AND TRY_CAST(amount AS DOUBLE) >= 500"
         )
-        print(filtered.to_string(index=False))
+        format_result(filtered)
 
         print("\n── Aggregate: SUM(amount) by region ──────────────")
-        print(p.aggregate("region", "amount", "SUM").to_string(index=False))
+        format_result(p.aggregate("region", "amount", "SUM"))
 
         print("\n── Aggregate: AVG(amount) by tier ────────────────")
-        print(p.aggregate("tier", "amount", "AVG").to_string(index=False))
+        format_result(p.aggregate("tier", "amount", "AVG"))
 
         print("\n── Pivot: region x tier -> SUM(amount) ────────────")
-        print(p.pivot("region", "tier", "amount").to_string(index=False))
+        format_result(p.pivot("region", "tier", "amount"))
 
         print("\n── Ad-hoc SQL ────────────────────────────────────")
         result = p.sql("""
@@ -69,4 +76,4 @@ class DemoAnalysis(BaseAnalyzer):
             GROUP BY region, tier
             ORDER BY total_amount DESC
         """)
-        print(result.to_string(index=False))
+        format_result(result)

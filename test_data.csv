@@ -1,0 +1,11 @@
+id,name,category,price,quantity,created_at
+1,Widget A,Electronics,29.99,100,2024-01-15
+2,Gadget B,Electronics,49.99,50,2024-01-16
+3,Tool C,Hardware,15.99,200,2024-01-17
+4,Supply D,Office,8.99,500,2024-01-18
+5,Device E,Electronics,99.99,25,2024-01-19
+6,Material F,Hardware,12.99,300,2024-01-20
+7,Accessory G,Electronics,19.99,150,2024-01-21
+8,Item H,Office,5.99,400,2024-01-22
+9,Product I,Hardware,24.99,100,2024-01-23
+10,Component J,Electronics,34.99,75,2024-01-24
