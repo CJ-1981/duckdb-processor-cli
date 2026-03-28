@@ -131,7 +131,6 @@ def run_analyzers(p: Processor, names: list[str]) -> None:
     for name in names:
         analyzer = get_analyzer(name)
         desc = analyzer.description or ""
-        bar_len = max(1, 58 - len(name) - len(desc))
         print(f"\n{'─' * 58}")
         print(f"  [{name}] {desc}")
         print(f"{'─' * 58}")

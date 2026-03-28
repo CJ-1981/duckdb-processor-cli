@@ -10,9 +10,14 @@ package) instead.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import duckdb
 
 from .config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from .formatters.base import BaseFormatter
 from .detection import detect_header, detect_kv
 from .parsing import normalize, read_input
 from .processor import Processor
@@ -72,7 +77,12 @@ def _insert_records(
         )
 
 
-def load(config: ProcessorConfig | None = None, **kwargs) -> Processor:
+def load(
+    config: ProcessorConfig | None = None,
+    *,
+    formatter: "BaseFormatter | None" = None,  # @MX:ANCHOR: Optional formatter for output customization (REQ-011)
+    **kwargs
+) -> Processor:
     """**Single entry point** — read, detect, normalise, load into DuckDB.
 
     This is the primary API for analysts.  Accept either a
@@ -85,6 +95,9 @@ def load(config: ProcessorConfig | None = None, **kwargs) -> Processor:
     config:
         A fully-populated configuration object.  When ``None``, *kwargs*
         are used to build one on the fly.
+    formatter:
+        Optional output formatter for customizing display (REQ-011).
+        When None, uses default print() output (backward compatible).
     **kwargs:
         Any field accepted by :class:`~duckdb_processor.config.ProcessorConfig`
         (e.g. ``file``, ``header``, ``kv``, ``table``).
@@ -114,6 +127,12 @@ def load(config: ProcessorConfig | None = None, **kwargs) -> Processor:
     From stdin / notebook::
 
         p = load()
+
+    With custom formatter (REQ-008)::
+
+        from duckdb_processor.formatters import RichFormatter, OutputConfig
+        formatter = RichFormatter(OutputConfig().__dict__)
+        p = load(file="data.csv", formatter=formatter)
     """
     if config is None:
         config = ProcessorConfig(**kwargs)
@@ -152,4 +171,5 @@ def load(config: ProcessorConfig | None = None, **kwargs) -> Processor:
         has_header=has_header,
         is_kv=is_kv,
         n_records=len(records),
+        formatter=formatter,  # @MX:NOTE: Pass formatter to processor (REQ-011)
     )

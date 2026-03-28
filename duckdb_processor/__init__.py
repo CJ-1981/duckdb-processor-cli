@@ -40,6 +40,8 @@ Writing a new analyzer
             result = p.sql("SELECT region, SUM(amount) FROM data GROUP BY 1")
             p.export_csv("my_output.csv")
 """
+import duckdb_processor.analysts  # noqa: F401, E402
+
 from .analyzer import (
     BaseAnalyzer,
     get_analyzer,
@@ -52,7 +54,6 @@ from .loader import load
 from .processor import Processor
 
 # Trigger auto-discovery of all analyzers in the analysts/ subpackage.
-import duckdb_processor.analysts  # noqa: F401, E402
 
 __all__ = [
     "BaseAnalyzer",

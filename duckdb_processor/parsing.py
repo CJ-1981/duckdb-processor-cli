@@ -12,7 +12,6 @@ import io
 import sys
 from pathlib import Path
 
-
 # ── Input reading ────────────────────────────────────────────
 
 

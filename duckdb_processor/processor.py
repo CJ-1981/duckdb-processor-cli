@@ -19,9 +19,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING, Optional
 
 import duckdb
 import pandas as pd
+
+if TYPE_CHECKING:
+    from .formatters.base import BaseFormatter
 
 
 class Processor:
@@ -55,6 +59,7 @@ class Processor:
         has_header: bool = False,
         is_kv: bool = False,
         n_records: int = 0,
+        formatter: Optional["BaseFormatter"] = None,  # @MX:ANCHOR: Formatter injection point for output customization (REQ-010)
     ):
         self.con = con
         self.columns = columns
@@ -65,6 +70,7 @@ class Processor:
             "is_kv": is_kv,
             "n_records": n_records,
         }
+        self.formatter = formatter  # Optional formatter for output (REQ-010, REQ-011)
 
     # ── Metadata ─────────────────────────────────────────────
 
@@ -80,21 +86,31 @@ class Processor:
         }
 
     def print_info(self) -> None:
-        """Print a formatted banner with dataset metadata."""
+        """Print a formatted banner with dataset metadata.
+
+        Uses formatter if available (REQ-008), otherwise falls back to
+        legacy format for backward compatibility (REQ-010).
+        """
         m = self.info()
-        width = 58
-        print()
-        print("\u2501" * width)
-        print("  DuckDB CSV Processor")
-        print("\u2501" * width)
-        print(f"  Source      : {m['source']}")
-        print(f"  Header      : {'yes' if m['header'] else 'no'}")
-        print(f"  Format      : {m['format']}")
-        print(f"  Rows loaded : {m['rows']}")
-        print(f"  Columns     : {', '.join(m['columns'])}")
-        print(f"  Table       : {m['table']}")
-        print("\u2501" * width)
-        print()
+
+        # Use formatter if available (REQ-004, REQ-008)
+        if self.formatter:
+            self.formatter.format_info(m)
+        else:
+            # Legacy format for backward compatibility (REQ-010)
+            width = 58
+            print()
+            print("\u2501" * width)
+            print("  DuckDB CSV Processor")
+            print("\u2501" * width)
+            print(f"  Source      : {m['source']}")
+            print(f"  Header      : {'yes' if m['header'] else 'no'}")
+            print(f"  Format      : {m['format']}")
+            print(f"  Rows loaded : {m['rows']}")
+            print(f"  Columns     : {', '.join(m['columns'])}")
+            print(f"  Table       : {m['table']}")
+            print("\u2501" * width)
+            print()
 
     # ── Core SQL ─────────────────────────────────────────────
 

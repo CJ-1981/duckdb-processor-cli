@@ -597,106 +597,50 @@ class BaseFormatter(ABC):
         pass
 ```
 
-**RichFormatter Implementation:**
+## Specifications
+
+### Component Specification 1: Formatter Architecture
+
+**BaseFormatter Interface:**
 
 ```python
-from rich.console import Console
-from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, BarColumn, TaskProgressColumn
+from abc import ABC, abstractmethod
 import pandas as pd
+from typing import Optional, Dict, Any
 
-class RichFormatter(BaseFormatter):
-    """Rich library-based formatter with colors and progress bars."""
+class BaseFormatter(ABC):
+    """Abstract base class for output formatters.
 
+    See tasks.md for detailed task breakdown:
+    - TASK-002: BaseFormatter abstract class implementation
+    - TASK-004: SimpleFormatter implementation
+    - TASK-005: RichFormatter implementation
+    """
+
+    @abstractmethod
     def __init__(self, config: Optional[Dict[str, Any]] = None):
-        self.console = Console()
-        self.color_enabled = config.get('color_enabled', True) if config else True
-        self.max_rows = config.get('max_rows', 50) if config else 50
+        """Initialize formatter with configuration."""
+        pass
 
+    @abstractmethod
     def format_dataframe(self, df: pd.DataFrame, max_rows: Optional[int] = None) -> None:
-        """Display DataFrame with type-aware styling."""
-        table = Table(show_header=True, header_style="bold magenta")
+        """Display a DataFrame with appropriate formatting."""
+        pass
 
-        for col in df.columns:
-            if pd.api.types.is_numeric_dtype(df[col]):
-                table.add_column(col, justify="right", style="cyan")
-            else:
-                table.add_column(col, style="white")
-
-        display_df = df
-        if len(df) > (max_rows or self.max_rows):
-            display_df = pd.concat([df.head(25), df.tail(25)])
-
-        for _, row in display_df.iterrows():
-            table.add_row(*row.astype(str).tolist())
-
-        self.console.print(table)
-
+    @abstractmethod
     def format_info(self, metadata: Dict[str, Any]) -> None:
         """Display dataset information banner."""
-        from rich.panel import Panel
-        info_text = "\n".join([
-            f"Source: {metadata.get('source', 'N/A')}",
-            f"Rows: {metadata.get('rows', 'N/A')}",
-            f"Columns: {', '.join(metadata.get('columns', []))}"
-        ])
-        panel = Panel(info_text, title="Dataset Info", border_style="blue")
-        self.console.print(panel)
+        pass
 
+    @abstractmethod
     def format_error(self, error: Exception, context: str, severity: str = "ERROR") -> None:
-        """Display color-coded error message."""
-        color_map = {"ERROR": "red", "WARNING": "yellow", "INFO": "blue"}
-        color = color_map.get(severity, "white")
-        self.console.print(f"[{color}]{severity}: {error}[/{color}]", file=sys.stderr)
+        """Display error message with appropriate styling."""
+        pass
 
+    @abstractmethod
     def format_progress(self, message: str, current: int, total: int) -> None:
-        """Display progress bar."""
-        with Progress(
-            SpinnerColumn(),
-            "[progress.description]{task.description}",
-            BarColumn(),
-            TaskProgressColumn(),
-            console=self.console
-        ) as progress:
-            task = progress.add_task(message, total=total)
-            progress.update(task, completed=current)
-```
-
-**SimpleFormatter Implementation:**
-
-```python
-class SimpleFormatter(BaseFormatter):
-    """Legacy compatibility wrapper using pandas string representation."""
-
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
-        self.max_rows = config.get('max_rows', 50) if config else 50
-
-    def format_dataframe(self, df: pd.DataFrame, max_rows: Optional[int] = None) -> None:
-        """Display DataFrame using pandas to_string() format."""
-        display_df = df
-        if len(df) > (max_rows or self.max_rows):
-            display_df = pd.concat([df.head(25), df.tail(25)])
-        print(display_df.to_string(index=False))
-
-    def format_info(self, metadata: Dict[str, Any]) -> None:
-        """Display dataset information using legacy format."""
-        width = 58
-        print("\n" + "─" * width)
-        print("  DuckDB CSV Processor")
-        print("─" * width)
-        print(f"  Source      : {metadata.get('source', 'N/A')}")
-        print(f"  Rows loaded : {metadata.get('rows', 'N/A')}")
-        print(f"  Columns     : {', '.join(metadata.get('columns', []))}")
-        print("─" * width + "\n")
-
-    def format_error(self, error: Exception, context: str, severity: str = "ERROR") -> None:
-        """Display error message in legacy format."""
-        print(f"{severity}: {error}", file=sys.stderr)
-
-    def format_progress(self, message: str, current: int, total: int) -> None:
-        """Display simple progress indicator."""
-        percent = (current / total) * 100 if total > 0 else 0
-        print(f"{message}: {current}/{total} ({percent:.1f}%)")
+        """Display progress indicator."""
+        pass
 ```
 
 ### Component Specification 2: Configuration Management

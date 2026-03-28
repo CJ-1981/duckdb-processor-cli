@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "duckdb>=0.9",
     "pandas>=2.0",
+    "rich>=13.7.0",  # @MX:NOTE: Terminal formatting library (REQ-001, REQ-004)
 ]
 
 [project.optional-dependencies]

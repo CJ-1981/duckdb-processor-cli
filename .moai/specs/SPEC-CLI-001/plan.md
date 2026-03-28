@@ -816,41 +816,23 @@ class RichFormatter(BaseFormatter):
 
 ---
 
-## 8. Next Steps
+## 8. Task Decomposition Reference
 
-### Immediate Actions (Week 1)
+**Task Breakdown Document:** `.moai/specs/SPEC-CLI-001/tasks.md`
 
-1. **Review and Approve Plan**
-   - Stakeholder review of implementation approach
-   - Risk assessment validation
-   - Resource allocation confirmation
+**Total Tasks:** 24 atomic tasks across 3 phases
+- Phase 1 (Foundation): 9 tasks
+- Phase 2 (Core Features): 7 tasks
+- Phase 3 (Advanced Features): 8 tasks
 
-2. **Setup Development Environment**
-   - Create feature branch: `feature/cli-formatting-enhancement`
-   - Install Rich library: `pip install rich>=13.7.0`
-   - Setup formatter test suite
+**Methodology:** DDD (ANALYZE-PRESERVE-IMPROVE)
 
-3. **Begin Phase 1 Implementation**
-   - Create `duckdb_processor/formatters/` directory
-   - Implement BaseFormatter abstract class
-   - Add unit tests for formatters
+**Coverage Verification:** All 75 SPEC requirements mapped to tasks
 
-### Documentation and Communication
-
-1. **User Documentation**
-   - Update README.md with new formatting features
-   - Create migration guide for existing users
-   - Add examples of new formatting capabilities
-
-2. **Developer Documentation**
-   - Document formatter API for extensions
-   - Add examples of custom formatters
-   - Create troubleshooting guide
-
-3. **Release Notes**
-   - Phase 1 release notes (Rich library integration)
-   - Phase 2 release notes (Progress indicators, enhanced tables)
-   - Phase 3 release notes (REPL enhancements, accessibility)
+**Next Steps:**
+1. Review `.moai/specs/SPEC-CLI-001/tasks.md` for detailed task breakdown
+2. Confirm task sequence and dependencies
+3. Begin with TASK-001 and follow the task sequence
 
 ---
 

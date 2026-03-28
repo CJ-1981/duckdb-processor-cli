@@ -9,6 +9,11 @@ import sys
 
 from .analyzer import list_analyzers, run_analyzers
 from .config import ProcessorConfig
+from .formatters import (  # @MX:NOTE: Formatter integration for CLI output (REQ-004, REQ-008)
+    OutputConfig,
+    RichFormatter,
+    SimpleFormatter,
+)
 from .loader import load
 from .processor import Processor
 
@@ -90,6 +95,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--interactive",
         action="store_true",
         help="Drop into interactive SQL REPL after loading",
+    )
+
+    # Output formatting options (REQ-062, REQ-064, REQ-065)
+    ap.add_argument(
+        "--format",
+        type=str,
+        default="rich",
+        choices=["rich", "simple"],
+        help="Output format: rich (colored, styled) or simple (plain text)",
+    )
+    ap.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable colored output (REQ-064)",
+    )
+    ap.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable progress indicators (REQ-018)",
     )
 
     return ap
@@ -178,9 +202,16 @@ def main(argv: list[str] | None = None) -> Processor | None:
         interactive=args.interactive,
     )
 
+    # ── Create output formatter (REQ-004, REQ-008) ───────────────
+    output_config = OutputConfig.from_args(args)
+    if output_config.formatter_type == "rich":
+        formatter = RichFormatter(output_config.__dict__)
+    else:
+        formatter = SimpleFormatter(output_config.__dict__)
+
     # ── Load data ─────────────────────────────────────────────
     try:
-        p = load(config)
+        p = load(config, formatter=formatter)  # @MX:NOTE: Pass formatter to loader (REQ-011)
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
