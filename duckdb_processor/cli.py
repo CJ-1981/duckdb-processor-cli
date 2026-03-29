@@ -131,6 +131,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _save_history_silent(history_file: Path) -> None:
+    """Save readline history to file, ignoring errors.
+
+    Args:
+        history_file: Path to history file
+    """
+    try:
+        readline.write_history_file(str(history_file))
+    except (PermissionError, OSError):
+        # Silently fail if we can't write history (e.g., read-only filesystem)
+        pass
+
+
 def interactive_repl(p: Processor) -> None:
     """Enhanced interactive SQL REPL with readline support.
 
@@ -163,8 +176,9 @@ def interactive_repl(p: Processor) -> None:
     history_file = Path.home() / ".duckdb_processor_history"
     try:
         readline.read_history_file(str(history_file))
-    except FileNotFoundError:
-        pass  # No history file yet, that's fine
+    except (FileNotFoundError, PermissionError):
+        # No history file yet or permission denied - start fresh
+        pass
 
     while True:
         try:
@@ -172,10 +186,7 @@ def interactive_repl(p: Processor) -> None:
         except (EOFError, KeyboardInterrupt):
             print("\nBye.")
             # Save history before exiting
-            try:
-                readline.write_history_file(str(history_file))
-            except Exception:
-                pass
+            _save_history_silent(history_file)
             break
 
         if not query:
@@ -183,10 +194,7 @@ def interactive_repl(p: Processor) -> None:
         if query.upper() in ("EXIT", "QUIT", "\\Q"):
             print("Bye.")
             # Save history before exiting
-            try:
-                readline.write_history_file(str(history_file))
-            except Exception:
-                pass
+            _save_history_silent(history_file)
             break
         if query == "\\schema":
             print(p.schema().to_string(index=False))
@@ -229,12 +237,9 @@ def interactive_repl(p: Processor) -> None:
                 print("Query executed successfully (no results)")
         except Exception as e:
             print(f"  Error: {e}")
-        finally:
-            # Auto-save history after each command
-            try:
-                readline.write_history_file(str(history_file))
-            except Exception:
-                pass
+
+        # Auto-save history after each command
+        _save_history_silent(history_file)
 
 
 def main(argv: list[str] | None = None) -> Processor | None:
