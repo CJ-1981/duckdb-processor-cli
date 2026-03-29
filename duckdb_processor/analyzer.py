@@ -129,7 +129,15 @@ def run_analyzers(p: Processor, names: list[str]) -> None:
     columns or views that later ones depend on.
     """
     for name in names:
-        analyzer = get_analyzer(name)
+        try:
+            analyzer = get_analyzer(name)
+        except KeyError as e:
+            import sys
+            print(f"\n❌ Error: {e}", file=sys.stderr)
+            print(f"\n💡 Tip: Use --list-analyzers to see all available analyzers", file=sys.stderr)
+            print(f"   Example: python -m duckdb_processor data.csv --list-analyzers\n", file=sys.stderr)
+            continue
+
         desc = analyzer.description or ""
         print(f"\n{'─' * 58}")
         print(f"  [{name}] {desc}")

@@ -77,9 +77,9 @@ class TimeAnalysis(BaseAnalyzer):
         print(f"    FROM data GROUP BY day ORDER BY day\")")
         daily = p.sql(f"""
             SELECT
-                DATE_TRUNC('day', CAST({date_col} AS DATE)) as day,
+                DATE_TRUNC('day', CAST("{date_col}" AS DATE)) as day,
                 COUNT(*) as records,
-                ROUND(SUM(CAST({numeric_col} AS DOUBLE)), 2) as daily_total
+                ROUND(SUM(CAST("{numeric_col}" AS DOUBLE)), 2) as daily_total
             FROM data
             GROUP BY day
             ORDER BY day
@@ -152,8 +152,8 @@ class TimeAnalysis(BaseAnalyzer):
         moving_avg = p.sql(f"""
             WITH daily_totals AS (
                 SELECT
-                    DATE_TRUNC('day', CAST({date_col} AS DATE)) as day,
-                    SUM(CAST({numeric_col} AS DOUBLE)) as daily_total
+                    DATE_TRUNC('day', CAST("{date_col}" AS DATE)) as day,
+                    SUM(CAST("{numeric_col}" AS DOUBLE)) as daily_total
                 FROM data
                 GROUP BY day
             )
@@ -182,8 +182,8 @@ class TimeAnalysis(BaseAnalyzer):
         mom_growth = p.sql(f"""
             WITH monthly_totals AS (
                 SELECT
-                    DATE_TRUNC('month', CAST({date_col} AS DATE)) as month,
-                    SUM(CAST({numeric_col} AS DOUBLE)) as total
+                    DATE_TRUNC('month', CAST("{date_col}" AS DATE)) as month,
+                    SUM(CAST("{numeric_col}" AS DOUBLE)) as total
                 FROM data
                 GROUP BY month
             )

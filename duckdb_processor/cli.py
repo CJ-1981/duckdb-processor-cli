@@ -11,7 +11,7 @@ from datetime import datetime
 from io import StringIO
 from pathlib import Path
 
-from .analyzer import list_analyzers, run_analyzers
+from .analyzer import get_analyzer, list_analyzers, run_analyzers
 from .config import ProcessorConfig
 from .formatters import (  # @MX:NOTE: Formatter integration for CLI output (REQ-004, REQ-008)
     OutputConfig,
@@ -490,38 +490,59 @@ def main(argv: list[str] | None = None) -> Processor | None:
             if "," in item:
                 names.extend([n.strip() for n in item.split(",") if n.strip()])
             else:
-                names.append(item.strip())
-        run_analyzers(p, names)
+                # Skip if it looks like a file extension
+                if not any(item.lower().endswith(ext) for ext in ['.csv', '.tsv', '.parquet', '.xlsx', '.json', '.txt']):
+                    names.append(item.strip())
 
-        # ── Handle export format for analyst results ──────────
-        if args.export_format and p.last_result is not None and not p.last_result.empty:
-            # Generate export filename
-            if output_file:
-                # Use output filename as base, change extension
-                base_name = Path(output_file).stem
-                export_filename = f"{base_name}.{args.export_format}"
-            else:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                export_filename = f"duckdb_export_{timestamp}.{args.export_format}"
+        # Filter out any remaining files that might have slipped through
+        names = [n for n in names if not '.' in n or n.startswith('-')]
 
+        # ── Run analyzers and export results individually ──────────
+        for name in names:
             try:
-                if args.export_format == "csv":
-                    p.last_result.to_csv(export_filename, index=False)
-                elif args.export_format == "json":
-                    p.last_result.to_json(export_filename, orient="records", indent=2)
-                elif args.export_format == "parquet":
-                    p.last_result.to_parquet(export_filename, index=False)
-                elif args.export_format == "xlsx":
-                    try:
-                        import openpyxl  # noqa: F401
-                    except ImportError:
-                        print("Error: openpyxl not installed. Install with: pip install openpyxl")
-                        print("Or install with: pip install duckdb-processor[export]")
-                        return p
-                    p.last_result.to_excel(export_filename, index=False, engine="openpyxl")
-                print(f"Analysis results exported → {export_filename}")
-            except Exception as e:
-                print(f"Error exporting results: {e}")
+                analyzer = get_analyzer(name)
+            except KeyError as e:
+                print(f"\n❌ Error: {e}", file=sys.stderr)
+                print(f"\n💡 Tip: Use --list-analyzers to see all available analyzers", file=sys.stderr)
+                print(f"   Example: python -m duckdb_processor data.csv --list-analyzers\n", file=sys.stderr)
+                continue
+
+            desc = analyzer.description or ""
+            print(f"\n{'─' * 58}")
+            print(f"  [{name}] {desc}")
+            print(f"{'─' * 58}")
+
+            analyzer.run(p)
+
+            # ── Export after each analyzer if requested ──────────
+            if args.export_format and p.last_result is not None and not p.last_result.empty:
+                # Generate export filename with analyzer name
+                if output_file:
+                    # Use output filename as base, add analyzer name, change extension
+                    base_name = Path(output_file).stem
+                    export_filename = f"{base_name}_{name}.{args.export_format}"
+                else:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    export_filename = f"duckdb_export_{name}_{timestamp}.{args.export_format}"
+
+                try:
+                    if args.export_format == "csv":
+                        p.last_result.to_csv(export_filename, index=False)
+                    elif args.export_format == "json":
+                        p.last_result.to_json(export_filename, orient="records", indent=2)
+                    elif args.export_format == "parquet":
+                        p.last_result.to_parquet(export_filename, index=False)
+                    elif args.export_format == "xlsx":
+                        try:
+                            import openpyxl  # noqa: F401
+                        except ImportError:
+                            print("Error: openpyxl not installed. Install with: pip install openpyxl")
+                            print("Or install with: pip install duckdb-processor[export]")
+                            return p
+                        p.last_result.to_excel(export_filename, index=False, engine="openpyxl")
+                    print(f"✓ Results exported → {export_filename}")
+                except Exception as e:
+                    print(f"Error exporting results: {e}")
 
     # ── Interactive REPL ──────────────────────────────────────
     if args.interactive:

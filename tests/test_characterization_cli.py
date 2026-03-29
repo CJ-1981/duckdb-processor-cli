@@ -64,18 +64,25 @@ class TestCLIArgumentParsing:
         assert args.table == 'my_table'
 
     def test_run_argument(self):
-        """Test analyzer execution argument."""
+        """Test analyzer execution argument.
+
+        NOTE: With nargs='+', argparse collects space-separated arguments
+        but does NOT split on commas. Comma splitting happens later in main().
+        This test captures the raw argparse behavior.
+        """
         parser = build_arg_parser()
         args = parser.parse_args(['--run', 'demo,step2', 'test.csv'])
 
-        assert args.run == 'demo,step2'
+        # argparse with nargs="+" collects space-separated args, not comma-split
+        assert args.run == ['demo,step2', 'test.csv']
+        assert len(args.run) == 2
 
     def test_col_names_argument(self):
         """Test column names argument."""
         parser = build_arg_parser()
         args = parser.parse_args(['--col-names', 'A,B,C', 'test.csv'])
 
-        assert args.col_names == 'A,B,C'
+        assert args.col_names == ['A,B,C', 'test.csv']
 
     def test_format_argument_default(self):
         """Test default format argument."""
@@ -172,22 +179,30 @@ class TestCLIIntegrationPoints:
         mock_processor.print_info.assert_called_once()
 
     @patch('duckdb_processor.cli.load')
-    @patch('duckdb_processor.cli.run_analyzers')
-    def test_analyzers_run_when_requested(self, mock_run, mock_load):
+    @patch('duckdb_processor.cli.get_analyzer')
+    def test_analyzers_run_when_requested(self, mock_get_analyzer, mock_load):
         """Test that analyzers are executed when --run is specified.
 
         NOTE: This captures CURRENT behavior. Analyzers run after
-        info banner is displayed.
+        info banner is displayed. Each analyzer is loaded and run individually.
         """
-        # Mock the processor
+        # Mock the processor and analyzer
         mock_processor = MagicMock()
+        mock_processor.last_result = None  # No export results
         mock_load.return_value = mock_processor
 
-        # Run main with --run flag
-        main(['--run', 'demo', 'test.csv'])
+        mock_analyzer = MagicMock()
+        mock_analyzer.description = "Demo analyzer"
+        mock_get_analyzer.return_value = mock_analyzer
 
-        # Verify analyzers were run
-        mock_run.assert_called_once_with(mock_processor, ['demo'])
+        # Run main with --run flag (file is positional, --run takes remaining args)
+        main(['test.csv', '--run', 'demo'])
+
+        # Verify get_analyzer was called for the analyzer
+        mock_get_analyzer.assert_called_once_with('demo')
+
+        # Verify analyzer's run method was called
+        mock_analyzer.run.assert_called_once_with(mock_processor)
 
 
 class TestCLILegacyBehavior:

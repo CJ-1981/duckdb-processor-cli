@@ -135,9 +135,9 @@ class DataQuality(BaseAnalyzer):
                         COUNT(*) as total_values,
                         SUM(CASE WHEN CAST("{col}" AS DOUBLE) < lower_bound THEN 1 END) as low_outliers,
                         SUM(CASE WHEN CAST("{col}" AS DOUBLE) > upper_bound THEN 1 END) as high_outliers,
-                        ROUND(median, 2) as median,
-                        ROUND(lower_bound, 2) as lower_bound,
-                        ROUND(upper_bound, 2) as upper_bound
+                        ROUND(MAX(median), 2) as median,
+                        ROUND(MAX(lower_bound), 2) as lower_bound,
+                        ROUND(MAX(upper_bound), 2) as upper_bound
                     FROM data, ranges
                     WHERE "{col}" != '' AND "{col}" IS NOT NULL
                 """)

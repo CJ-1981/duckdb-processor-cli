@@ -78,14 +78,21 @@ class BusinessMetrics(BaseAnalyzer):
                 WHERE "{amount_col}" != '' AND "{amount_col}" IS NOT NULL
                 GROUP BY "{entity_col}"
             ),
+            with_grand_total AS (
+                SELECT
+                    "{entity_col}",
+                    total,
+                    (SELECT SUM(total) FROM entity_totals) as grand_total
+                FROM entity_totals
+            ),
             ranked_entities AS (
                 SELECT
                     "{entity_col}",
                     total,
+                    grand_total,
                     ROW_NUMBER() OVER (ORDER BY total DESC) as rank,
-                    SUM(total) OVER (ORDER BY total DESC) as running_total,
-                    SUM(total) OVER () as grand_total
-                FROM entity_totals
+                    SUM(total) OVER (ORDER BY total DESC) as running_total
+                FROM with_grand_total
             )
             SELECT
                 "{entity_col}",
@@ -205,32 +212,40 @@ class BusinessMetrics(BaseAnalyzer):
                     "{entity_col}",
                     SUM(CAST(\"{amount_col}\" AS DOUBLE)) as total
                 FROM data
-                GROUP BY "{entity_col}"
+                GROUP BY \"{entity_col}\"
+            ),
+            with_grand_total AS (
+                SELECT
+                    \"{entity_col}\",
+                    total,
+                    (SELECT SUM(total) FROM entity_totals) as grand_total
+                FROM entity_totals
             ),
             ranked AS (
                 SELECT
+                    \"{entity_col}\",
                     total,
-                    ROW_NUMBER() OVER (ORDER BY total DESC) as rank,
-                    SUM(total) OVER () as grand_total
-                FROM entity_totals
+                    grand_total,
+                    ROW_NUMBER() OVER (ORDER BY total DESC) as rank
+                FROM with_grand_total
             )
             SELECT
                 'Top 3' as metric,
-                ROUND(SUM(total) / ANY_VALUE(grand_total) * 100, 2) as concentration_pct
+                ROUND(SUM(total) / MAX(grand_total) * 100, 2) as concentration_pct
             FROM ranked
             WHERE rank <= 3
             GROUP BY 1
             UNION ALL
             SELECT
                 'Top 10',
-                ROUND(SUM(total) / ANY_VALUE(grand_total) * 100, 2)
+                ROUND(SUM(total) / MAX(grand_total) * 100, 2)
             FROM ranked
             WHERE rank <= 10
             GROUP BY 1
             UNION ALL
             SELECT
                 'Top 25',
-                ROUND(SUM(total) / ANY_VALUE(grand_total) * 100, 2)
+                ROUND(SUM(total) / MAX(grand_total) * 100, 2)
             FROM ranked
             WHERE rank <= 25
             GROUP BY 1
