@@ -33,76 +33,76 @@ class SampleDataSQLExamples(BaseAnalyzer):
         result1 = p.sql("SELECT * FROM data LIMIT 5")
         format_result(result1)
 
-        # Query 2: Category statistics
+        # Query 2: Region statistics
         print("\n" + "─" * 60)
-        print("Query 2: Category Statistics")
+        print("Query 2: Region Statistics")
         print("─" * 60)
         result2 = p.sql("""
             SELECT
-                category,
-                COUNT(*) AS product_count,
-                SUM(CAST(price AS DOUBLE) * CAST(quantity AS INTEGER)) AS total_value,
-                AVG(CAST(price AS DOUBLE)) AS avg_price
+                region,
+                COUNT(*) AS count,
+                SUM(CAST(amount AS DOUBLE)) AS total_amount,
+                AVG(CAST(amount AS DOUBLE)) AS avg_amount
             FROM data
-            GROUP BY category
-            ORDER BY total_value DESC
+            GROUP BY region
+            ORDER BY total_amount DESC
         """)
         format_result(result2)
 
-        # Query 3: Price ranking by category
+        # Query 3: Amount ranking by region
         print("\n" + "─" * 60)
-        print("Query 3: Price Ranking by Category")
+        print("Query 3: Amount Ranking by Region")
         print("─" * 60)
         result3 = p.sql("""
             SELECT
-                name,
-                category,
-                CAST(price AS DOUBLE) AS price,
-                RANK() OVER (PARTITION BY category ORDER BY CAST(price AS DOUBLE) DESC) AS rank_in_category
+                id,
+                region,
+                CAST(amount AS DOUBLE) AS amount,
+                RANK() OVER (PARTITION BY region ORDER BY CAST(amount AS DOUBLE) DESC) AS rank_in_region
             FROM data
-            ORDER BY category, rank_in_category
+            ORDER BY region, rank_in_region
         """)
         format_result(result3)
 
-        # Query 4: Price tier classification
+        # Query 4: Value classification
         print("\n" + "─" * 60)
-        print("Query 4: Price Tier Classification")
+        print("Query 4: Value Classification")
         print("─" * 60)
         result4 = p.sql("""
             SELECT
-                name,
-                CAST(price AS DOUBLE) AS price,
+                id,
+                CAST(amount AS DOUBLE) AS amount,
                 CASE
-                    WHEN CAST(price AS DOUBLE) < 10 THEN 'Budget'
-                    WHEN CAST(price AS DOUBLE) < 50 THEN 'Standard'
-                    ELSE 'Premium'
-                END AS price_tier
+                    WHEN CAST(amount AS DOUBLE) < 1000 THEN 'Low'
+                    WHEN CAST(amount AS DOUBLE) < 10000 THEN 'Medium'
+                    ELSE 'High'
+                END AS value_tier
             FROM data
-            ORDER BY price DESC
+            ORDER BY amount DESC
         """)
         format_result(result4)
 
-        # Query 5: Low stock alert
+        # Query 5: High value alert
         print("\n" + "─" * 60)
-        print("Query 5: Low Stock Alert (Quantity < 100)")
+        print("Query 5: High Value Alert (Amount > 10000)")
         print("─" * 60)
         result5 = p.sql("""
-            SELECT name, CAST(quantity AS INTEGER) AS quantity, category
+            SELECT id, CAST(amount AS DOUBLE) AS amount, region
             FROM data
-            WHERE CAST(quantity AS INTEGER) < 100
-            ORDER BY quantity ASC
+            WHERE CAST(amount AS DOUBLE) > 10000
+            ORDER BY amount DESC
         """)
         format_result(result5)
 
-        # Query 6: Above average pricing
+        # Query 6: Above average amounts
         print("\n" + "─" * 60)
-        print("Query 6: Products Above Average Price")
+        print("Query 6: Above Average Amounts")
         print("─" * 60)
         result6 = p.sql("""
-            SELECT name, CAST(price AS DOUBLE) AS price, category
+            SELECT id, CAST(amount AS DOUBLE) AS amount, region
             FROM data
-            WHERE CAST(price AS DOUBLE) > (SELECT AVG(CAST(price AS DOUBLE)) FROM data)
-            ORDER BY price DESC
+            WHERE CAST(amount AS DOUBLE) > (SELECT AVG(CAST(amount AS DOUBLE)) FROM data)
+            ORDER BY amount DESC
         """)
         format_result(result6)
 
