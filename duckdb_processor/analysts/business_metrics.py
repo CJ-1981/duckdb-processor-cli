@@ -75,7 +75,7 @@ class BusinessMetrics(BaseAnalyzer):
                     "{entity_col}",
                     SUM(CAST("{amount_col}" AS DOUBLE)) as total
                 FROM data
-                WHERE "{amount_col}" != '' AND "{amount_col}" IS NOT NULL
+                WHERE CAST("{amount_col}" AS VARCHAR) != '' AND "{amount_col}" IS NOT NULL
                 GROUP BY "{entity_col}"
             ),
             with_grand_total AS (
@@ -183,7 +183,7 @@ class BusinessMetrics(BaseAnalyzer):
                         DATE_PART('year', CAST(\"{date_col}\" AS DATE))::int as period,
                         SUM(CAST(\"{amount_col}\" AS DOUBLE)) as total
                     FROM data
-                    WHERE \"{date_col}\" != ''
+                    WHERE CAST(\"{date_col}\" AS VARCHAR) != ''
                     GROUP BY period
                 )
                 SELECT
@@ -270,7 +270,7 @@ class BusinessMetrics(BaseAnalyzer):
                 COUNT(*) as total_records,
                 COUNT(DISTINCT "{entity_col}") as unique_entities
             FROM data
-            WHERE \"{amount_col}\" != '' AND \"{amount_col}\" IS NOT NULL
+            WHERE CAST(\"{amount_col}\" AS VARCHAR) != '' AND \"{amount_col}\" IS NOT NULL
         """)
         show("Mean vs Median", central)
 

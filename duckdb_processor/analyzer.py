@@ -78,6 +78,28 @@ class BaseAnalyzer(ABC):
 # ── Global registry ──────────────────────────────────────────
 
 _registry: dict[str, type[BaseAnalyzer]] = {}
+_discovered = False
+
+
+def _discover_analyzers():
+    """Dynamically discover and load all analyzer modules from the analysts package."""
+    global _discovered
+    if _discovered:
+        return
+        
+    import importlib
+    import pkgutil
+    import duckdb_processor.analysts as analysts_pkg
+    
+    for _, module_name, _ in pkgutil.iter_modules(analysts_pkg.__path__):
+        full_module_name = f"{analysts_pkg.__name__}.{module_name}"
+        try:
+            importlib.import_module(full_module_name)
+        except Exception as e:
+            import sys
+            print(f"Warning: Failed to load analyzer module '{full_module_name}': {e}", file=sys.stderr)
+            
+    _discovered = True
 
 
 def register(cls: type[BaseAnalyzer]) -> type[BaseAnalyzer]:
@@ -105,6 +127,7 @@ def get_analyzer(name: str) -> BaseAnalyzer:
     KeyError
         If *name* is not in the registry (message lists available names).
     """
+    _discover_analyzers()
     if name not in _registry:
         available = ", ".join(sorted(_registry)) or "(none registered)"
         raise KeyError(
@@ -115,6 +138,7 @@ def get_analyzer(name: str) -> BaseAnalyzer:
 
 def list_analyzers() -> list[dict]:
     """Return metadata dicts for every registered analyzer."""
+    _discover_analyzers()
     return [
         {"name": name, "description": cls().description}
         for name, cls in sorted(_registry.items())

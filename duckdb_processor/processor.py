@@ -115,7 +115,7 @@ class Processor:
 
     # ── Core SQL ─────────────────────────────────────────────
 
-    def sql(self, query: str) -> pd.DataFrame:
+    def sql(self, query: str, parameters: list | tuple | dict | None = None) -> pd.DataFrame:
         """Execute arbitrary SQL and return the result as a DataFrame.
 
         The table name configured at load time (default ``data``)
@@ -125,12 +125,17 @@ class Processor:
         ----------
         query:
             Any valid DuckDB SQL statement.
+        parameters:
+            Optional parameters to bind to the query to prevent SQL injection.
 
         Returns
         -------
         pandas.DataFrame
         """
-        result = self.con.execute(query).df()
+        if parameters is not None:
+            result = self.con.execute(query, parameters).df()
+        else:
+            result = self.con.execute(query).df()
         self.last_result = result  # Store for export
         return result
 
@@ -158,7 +163,7 @@ class Processor:
         for c in self.columns:
             count = self.con.execute(
                 f'SELECT COUNT(*) FROM {self.table} '
-                f'WHERE "{c}" IS NOT NULL AND "{c}" != \'\''
+                f'WHERE "{c}" IS NOT NULL AND CAST("{c}" AS VARCHAR) != \'\''
             ).fetchone()[0]
             rows.append(
                 {
@@ -171,14 +176,15 @@ class Processor:
 
     # ── Filter ───────────────────────────────────────────────
 
-    def filter(self, where: str) -> pd.DataFrame:
+    def filter(self, where: str, parameters: list | tuple | dict | None = None) -> pd.DataFrame:
         """Return rows matching a SQL ``WHERE`` clause.
 
         Example
         -------
         >>> p.filter("status = 'active' AND CAST(amount AS DOUBLE) >= 500")
+        >>> p.filter("status = ? AND category = ?", ["active", "electronics"])
         """
-        return self.sql(f"SELECT * FROM {self.table} WHERE {where}")
+        return self.sql(f"SELECT * FROM {self.table} WHERE {where}", parameters)
 
     def create_view(self, name: str, where: str) -> None:
         """Persist a filtered view for use in later queries.
@@ -197,7 +203,7 @@ class Processor:
     # ── Derive ───────────────────────────────────────────────
 
     def add_column(
-        self, new_col: str, expr: str, source: str | None = None
+        self, new_col: str, expr: str, source: str | None = None, parameters: list | tuple | dict | None = None
     ) -> None:
         """Add (or replace) a derived column via a SQL expression.
 
@@ -221,9 +227,13 @@ class Processor:
         self.con.execute(
             f'ALTER TABLE {tbl} ADD COLUMN "{new_col}" VARCHAR'
         )
-        self.con.execute(
-            f'UPDATE {tbl} SET "{new_col}" = CAST(({expr}) AS VARCHAR)'
-        )
+        
+        update_sql = f'UPDATE {tbl} SET "{new_col}" = CAST(({expr}) AS VARCHAR)'
+        if parameters is not None:
+            self.con.execute(update_sql, parameters)
+        else:
+            self.con.execute(update_sql)
+            
         if new_col not in self.columns:
             self.columns.append(new_col)
         print(f"Column '{new_col}' added")
@@ -268,7 +278,7 @@ class Processor:
                    ROUND({func}(TRY_CAST("{agg_field}" AS DOUBLE)), 2)
                        AS {func.lower()}_{agg_field}
             FROM {tbl}
-            WHERE "{agg_field}" IS NOT NULL AND "{agg_field}" != ''
+            WHERE "{agg_field}" IS NOT NULL AND CAST("{agg_field}" AS VARCHAR) != ''
             GROUP BY {gb}
             ORDER BY {func.lower()}_{agg_field} DESC
         """)

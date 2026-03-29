@@ -96,8 +96,8 @@ class DataQuality(BaseAnalyzer):
             numeric_check = p.sql(f"""
                 SELECT
                     COUNT(*) as total,
-                    COUNT(CASE WHEN "{col}" ~ '^[0-9]*\\\\.?[0-9]+$' THEN 1 END) as numeric_count,
-                    COUNT(CASE WHEN "{col}" = '' THEN 1 END) as empty_count
+                    COUNT(CASE WHEN CAST("{col}" AS VARCHAR) ~ '^[0-9]*\\\\.?[0-9]+$' THEN 1 END) as numeric_count,
+                    COUNT(CASE WHEN CAST("{col}" AS VARCHAR) = '' THEN 1 END) as empty_count
                 FROM data
             """)
             row = numeric_check.iloc[0]
@@ -119,7 +119,7 @@ class DataQuality(BaseAnalyzer):
                             PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY CAST("{col}" AS DOUBLE)) as q3,
                             PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY CAST("{col}" AS DOUBLE)) as median
                         FROM data
-                        WHERE "{col}" != '' AND "{col}" IS NOT NULL
+                        WHERE CAST("{col}" AS VARCHAR) != '' AND "{col}" IS NOT NULL
                     ),
                     ranges AS (
                         SELECT
@@ -139,7 +139,7 @@ class DataQuality(BaseAnalyzer):
                         ROUND(MAX(lower_bound), 2) as lower_bound,
                         ROUND(MAX(upper_bound), 2) as upper_bound
                     FROM data, ranges
-                    WHERE "{col}" != '' AND "{col}" IS NOT NULL
+                    WHERE CAST("{col}" AS VARCHAR) != '' AND "{col}" IS NOT NULL
                 """)
                 show(f"Outlier Analysis for '{col}'", outliers)
 
@@ -160,7 +160,7 @@ class DataQuality(BaseAnalyzer):
                         COUNT(*) as count,
                         ROUND(100 * COUNT(*) / SUM(COUNT(*)) OVER(), 2) as percentage
                     FROM data
-                    WHERE "{col}" != '' AND "{col}" IS NOT NULL
+                    WHERE CAST("{col}" AS VARCHAR) != '' AND "{col}" IS NOT NULL
                     GROUP BY "{col}"
                     ORDER BY count DESC
                     LIMIT 5

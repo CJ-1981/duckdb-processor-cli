@@ -153,16 +153,46 @@ def load(
         config.kv if config.kv is not None else detect_kv(raw_rows, skip_first=has_header)
     )
 
-    # 3. Normalise into list[dict]
+    # 3. Choose loading strategy (Native DuckDB vs Python)
+    con = duckdb.connect()
+
+    if not is_kv and config.file is not None:
+        try:
+            # Fast native path
+            header_opt = "TRUE" if has_header else "FALSE"
+            query = f"CREATE TABLE {config.table} AS SELECT *, row_number() over() as _row FROM read_csv_auto('{config.file}', header={header_opt})"
+            con.execute(query)
+            
+            existing_cols = [c[0] for c in con.execute(f"DESCRIBE {config.table}").fetchall() if c[0] != "_row"]
+            if config.col_names:
+                for idx, new_name in enumerate(config.col_names):
+                    if idx < len(existing_cols) and existing_cols[idx] != new_name:
+                        con.execute(f'ALTER TABLE {config.table} RENAME COLUMN "{existing_cols[idx]}" TO "{new_name}"')
+            
+            columns = [c[0] for c in con.execute(f"DESCRIBE {config.table}").fetchall() if c[0] != "_row"]
+            n_records = con.execute(f"SELECT COUNT(*) FROM {config.table}").fetchone()[0]
+            
+            return Processor(
+                con,
+                columns,
+                config.table,
+                source=source,
+                has_header=has_header,
+                is_kv=is_kv,
+                n_records=n_records,
+                formatter=formatter,
+            )
+        except Exception:
+            # If native loading fails for any reason, drop the table and fallback to python
+            con.execute(f"DROP TABLE IF EXISTS {config.table}")
+
+    # Fallback / KV-parsing / stdin path
     records = normalize(raw_rows, has_header, is_kv, config.col_names)
 
-    # 4. Load into DuckDB
-    con = duckdb.connect()
     columns = _infer_columns(records)
     _create_table(con, columns, config.table)
     _insert_records(con, columns, records, config.table)
 
-    # 5. Return Processor
     return Processor(
         con,
         columns,
@@ -171,5 +201,5 @@ def load(
         has_header=has_header,
         is_kv=is_kv,
         n_records=len(records),
-        formatter=formatter,  # @MX:NOTE: Pass formatter to processor (REQ-011)
+        formatter=formatter,
     )

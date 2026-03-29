@@ -73,7 +73,7 @@ class RichFormatter(BaseFormatter):
         display_df = truncate_dataframe(df, max_display_rows)
 
         for _, row in display_df.iterrows():
-            table.add_row(*row.astype(str).tolist())
+            table.add_row(*[str(x) for x in row.tolist()])
 
         self.console.print(table)
 
