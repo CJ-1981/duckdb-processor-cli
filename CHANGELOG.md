@@ -7,85 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Interactive file dialog** - Prompt to open a native file picker dialog when no input file is provided in an interactive terminal.
+- **CLI export format support** - New `--export-format` flag to export analyst query results to CSV, JSON, XLSX, or Parquet.
+- **Business Logic Pattern Examples** - Six new example analysts (`basic_patterns`, `time_analysis`, `data_quality`, `business_metrics`, `python_patterns`, `sql_examples`).
+- **Query Result Export** - New REPL command `\export <file> <format>` to save the last query results.
+- **Last result tracking** - Processor now tracks the last query result for easy export.
+- **Multi-line SQL queries** - REPL now supports multi-line SQL input with ';' or empty line termination.
+
 ### Changed
-- **Analyst file naming** - Renamed demo analysts to match their associated data files:
-  - `demo.py` → `sample_data_demo.py` (class: `DemoAnalysis` → `SampleDataDemo`)
-  - `sql_examples.py` → `sample_data_sql_examples.py` (class: `SQLExamples` → `SampleDataSQLExamples`)
-  - Analyst names updated: `demo` → `sample_data_demo`, `sql_examples` → `sample_data_sql_examples`
-  - Improves organization by clearly associating analysts with their data files
-  - Updated all documentation references to use new names
-
-### Added
-- **CLI export format support** - New `--export-format` flag to export analyst query results:
-  - Works with `--run` flag: `python -m duckdb_processor data.csv --run demo --export-format csv`
-  - Supports formats: csv, json, xlsx, parquet
-  - Automatically generates filename: `duckdb_export_YYYYMMDD_HHMMSS.<format>`
-  - Can be combined with `--output` to save info banner and export results
-- **Business Logic Pattern Examples** - Six new example analysts for quick learning:
-  - **`basic_patterns`** - Fundamental filtering, grouping, and aggregation (beginner-friendly)
-  - **`time_analysis`** - Time series analysis: trends, moving averages, period-over-period growth
-  - **`data_quality`** - Data validation: missing values, duplicates, outliers, freshness
-  - **`business_metrics`** - KPIs: Pareto (80/20), percentiles, concentration ratio
-  - **`python_patterns`** - Pure Python analysis using pandas (no SQL required)
-  - **`sql_examples`** - Common SQL query patterns and examples
-  - Includes detailed inline comments and business context
-  - Beginner-friendly with both SQL and Python approaches
-  - New **[ANALYST_EXAMPLES.md](ANALYST_EXAMPLES.md)** documentation guide
-- **Query Result Export** - New `\export <file> <format>` REPL command to export the last query result:
-  - Formats: csv, json, xlsx, parquet
-  - Example: `\export results.json xlsx`
-  - Requires openpyxl for Excel export: `pip install duckdb-processor[export]`
-- **Last result tracking** - Processor now tracks last query result for easy export via `p.last_result`
-- **Multi-line SQL queries** - REPL now supports multi-line SQL input:
-  - End queries with semicolon (;) or press Enter on empty line
-  - Continuation prompt (...>) shows incomplete query
-  - Example:
-    ```
-    sql> SELECT *
-    ...> FROM data
-    ...> WHERE price > 100
-    ...> AND category = 'Electronics'
-    ...> ;
-    ```
-- **File not found hang** - Fixed issue where app would hang when input file doesn't exist. Now shows clear error message and exits immediately instead of blocking on stdin.
-
-### Added
-- **CLI export format support** - New `--export-format` flag to export analyst query results:
-  - Works with `--run` flag: `python -m duckdb_processor data.csv --run demo --export-format csv`
-  - Supports formats: csv, json, xlsx, parquet
-  - Automatically generates filename: `duckdb_export_YYYYMMDD_HHMMSS.<format>`
-  - Can be combined with `--output` to save info banner and export results
-- **Query Result Export** - New `\export <file> <format>` REPL command to export the last query result:
-- **Query Result Export** - New `\export <file> <format>` REPL command to export the last query result:
-  - Formats: csv, json, xlsx, parquet
-  - Example: `\export results.json xlsx`
-  - Requires openpyxl for Excel export: `pip install duckdb-processor[export]`
-- **Last result tracking** - Processor now tracks last query result for easy export via `p.last_result`
-- **Multi-line SQL queries** - REPL now supports multi-line SQL input:
-  - End queries with semicolon (;) or press Enter on empty line
-  - Continuation prompt (...>) shows incomplete query
-  - Example:
-    ```
-    sql> SELECT *
-    ...> FROM data
-    ...> WHERE price > 100
-    ...> AND category = 'Electronics'
-    ...> ;
-    ```
+- **Analyst file naming** - Renamed demo analysts to match their data files (e.g., `demo.py` → `sample_data_demo.py`).
+- **Sample SQL query refactor** - Updated queries to use regional data and amount-based metrics for better realism.
+- **SQL query robustness** - Improved query structure with explicit grand totals and dynamic column auto-detection in demo analysts.
 
 ### Fixed
-- **REPL character retention bug** - Fixed issue where characters from previous input were retained in new input. Added `readline.clear_history()` at REPL start to prevent state pollution.
-- **REPL history permission error** - Fixed PermissionError when reading/writing history file. Added robust error handling for PermissionError and OSError to gracefully handle read-only filesystems or missing history files.
-- **REPL history bug** - Fixed issue where first character from previous input was retained in new input. Added proper readline history management with persistent history file (`~/.duckdb_processor_history`).
-- **Output file formatting** - Output files now contain plain text instead of Rich formatting codes (ANSI escape sequences). Uses SimpleFormatter when writing to files while preserving Rich formatting on console.
+- **File not found hang** - App now shows a clear error message and exits immediately if the input file is missing.
+- **REPL character retention** - Fixed state pollution where characters from previous inputs were retained.
+- **REPL history management** - Fixed permission errors and character retention bugs; added persistent history file (`~/.duckdb_processor_history`).
+- **Output file formatting** - Output files now contain plain text instead of Rich-formatted ANSI escape sequences.
 
 ### Enhanced
-- **REPL keyboard support** - Added readline support for better keyboard interaction:
-  - Arrow keys for cursor movement (left/right) and command history (up/down)
-  - Inline editing support - edit anywhere in SQL commands, not just delete from back
-  - New `\tables` command to list all database tables
-  - New `\help` command with keyboard shortcut documentation
-  - Better error handling for empty query results
+- **REPL keyboard support** - Added readline support for arrow keys, inline editing, and new special commands (`\tables`, `\help`).
 
 ## [1.0.0] - 2026-03-29
 
