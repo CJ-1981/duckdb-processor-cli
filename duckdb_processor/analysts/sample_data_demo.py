@@ -1,8 +1,8 @@
-"""Built-in demo analysis showcasing Processor capabilities.
+"""Built-in demo analysis for sample_data.csv.
 
 Run via::
 
-    python -m duckdb_processor data.csv --run demo
+    python -m duckdb_processor sample_data.csv --run sample_data_demo
 
 This analyzer demonstrates the key methods available on the
 :class:`~duckdb_processor.processor.Processor` class:
@@ -14,11 +14,11 @@ from duckdb_processor.analyzer import BaseAnalyzer, register
 
 
 @register
-class DemoAnalysis(BaseAnalyzer):
-    """Example analysis that exercises every major Processor method."""
+class SampleDataDemo(BaseAnalyzer):
+    """Example analysis for sample_data.csv demonstrating Processor capabilities."""
 
-    name = "demo"
-    description = "Built-in demo: coverage, filtering, aggregation, and pivot"
+    name = "sample_data_demo"
+    description = "Demo for sample_data.csv: coverage, filtering, aggregation, and pivot"
 
     def run(self, p):
         """Execute the full demo sequence using configured formatter."""

@@ -30,10 +30,19 @@ def read_input(source: str | None) -> list[list[str]]:
     -------
     list[list[str]]
         Non-empty rows of string tokens.
+
+    Raises
+    ------
+    FileNotFoundError
+        If *source* is provided but the file does not exist.
     """
-    if source and Path(source).exists():
-        text = Path(source).read_text()
+    if source:
+        source_path = Path(source)
+        if not source_path.exists():
+            raise FileNotFoundError(f"Input file not found: {source}")
+        text = source_path.read_text()
     else:
+        # Read from stdin (blocks until EOF)
         text = sys.stdin.read()
 
     reader = csv.reader(io.StringIO(text))

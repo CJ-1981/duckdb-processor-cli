@@ -1,21 +1,21 @@
-"""SQL example queries for testing and demonstration.
+"""SQL example queries for sample_data.csv.
 
 This analyst module provides several example queries that demonstrate
 DuckDB SQL capabilities with the CSV processor.
 
 Run via::
 
-    python -m duckdb_processor data.csv --run sql_examples
+    python -m duckdb_processor sample_data.csv --run sample_data_sql_examples
 """
 from duckdb_processor.analyzer import BaseAnalyzer, register
 
 
 @register
-class SQLExamples(BaseAnalyzer):
-    """Run example SQL queries for demonstration."""
+class SampleDataSQLExamples(BaseAnalyzer):
+    """Run example SQL queries for sample_data.csv."""
 
-    name = "sql_examples"
-    description = "Example SQL queries for testing"
+    name = "sample_data_sql_examples"
+    description = "Example SQL queries for sample_data.csv"
 
     def run(self, p) -> None:
         """Execute example queries using configured formatter."""

@@ -77,18 +77,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     ap.add_argument(
         "--col-names",
-        type=str,
-        default=None,
-        help="Comma-separated column names (when --no-header and --no-kv)",
+        nargs="+",
+        help="Column names, comma or space separated (when --no-header and --no-kv)",
     )
     ap.add_argument(
         "--table", default="data", help="DuckDB table name (default: data)"
     )
     ap.add_argument(
         "--run",
-        type=str,
-        default=None,
-        help="Run named analyzer(s), comma-separated (e.g. --run demo,step2)",
+        nargs="+",
+        help="Run named analyzer(s), comma or space separated (e.g. --run demo,step2)",
     )
     ap.add_argument(
         "--list-analyzers",
@@ -127,6 +125,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         const="",
         help="Save output to file (default: duckdb_output_YYYYMMDD_HHMMSS.txt if no filename specified)",
     )
+    ap.add_argument(
+        "--export-format",
+        type=str,
+        default=None,
+        choices=["json", "xlsx", "parquet", "csv"],
+        help="Export query results to file format (json, xlsx, parquet, csv)",
+    )
 
     return ap
 
@@ -145,19 +150,26 @@ def _save_history_silent(history_file: Path) -> None:
 
 
 def interactive_repl(p: Processor) -> None:
-    """Enhanced interactive SQL REPL with readline support.
+    """Enhanced interactive SQL REPL with readline support and multi-line queries.
 
     Features:
     - Arrow keys for cursor movement and inline editing
     - Command history (up/down arrows)
-    - Special commands: \\schema, \\coverage, \\tables, \\help
+    - Multi-line SQL queries (semicolon or empty line to terminate)
+    - Special commands: \\schema, \\coverage, \\tables, \\export, \\help
 
     Special Commands:
     * ``EXIT`` / ``QUIT`` / ``\\q`` — quit the REPL.
     * ``\\schema`` — show column names and types.
     * ``\\coverage`` — show column fill rates.
     * ``\\tables`` — list all tables in database.
+    * ``\\export <file> <format>`` — export last query result.
     * ``\\help`` — show help message.
+
+    Multi-line Queries:
+    * End with semicolon (;) to execute
+    * Or press Enter on empty line to execute
+    * Continuation prompt (...>) shows incomplete query
     """
     print("\n── Interactive SQL REPL ─────────────────────────────────")
     print(
@@ -166,6 +178,7 @@ def interactive_repl(p: Processor) -> None:
     )
     print("─" * 58)
     print("Tips: Use arrow keys for history and cursor movement")
+    print("      End multi-line queries with semicolon (;) or empty line")
 
     # Clear any existing readline state to prevent character retention
     readline.clear_history()
@@ -184,54 +197,149 @@ def interactive_repl(p: Processor) -> None:
         pass
 
     while True:
-        try:
-            query = input("\nsql> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nBye.")
-            # Save history before exiting
-            _save_history_silent(history_file)
-            break
+        query_lines = []
+        prompt = "sql>"
 
-        if not query:
-            continue
-        if query.upper() in ("EXIT", "QUIT", "\\Q"):
-            print("Bye.")
-            # Save history before exiting
-            _save_history_silent(history_file)
-            break
-        if query == "\\schema":
-            print(p.schema().to_string(index=False))
-            continue
-        if query == "\\coverage":
-            print(p.coverage().to_string(index=False))
-            continue
-        if query == "\\tables":
+        while True:
             try:
-                tables = p.sql("SHOW TABLES")
-                print(tables.to_string(index=False))
-            except Exception as e:
-                print(f"  {e}")
-            continue
-        if query == "\\help":
-            print("\nAvailable commands:")
-            print("  \\schema   - Show column names and types")
-            print("  \\coverage - Show column fill rates")
-            print("  \\tables   - List all tables")
-            print("  \\help     - Show this help message")
-            print("  EXIT       - Exit REPL")
-            print("\nKeyboard shortcuts:")
-            print("  Arrow Up/Down - Navigate command history")
-            print("  Arrow Left/Right - Move cursor in current line")
-            print("  Ctrl+A - Move to beginning of line")
-            print("  Ctrl+E - Move to end of line")
-            print("\nHistory:")
-            print(f"  History file: {history_file}")
-            print("  Commands are saved automatically and restored across sessions")
+                line = input(f"\n{prompt} ").rstrip()
+            except (EOFError, KeyboardInterrupt):
+                if query_lines:
+                    # User cancelled mid-query
+                    print("\nQuery cancelled.")
+                    break
+                else:
+                    # User wants to exit
+                    print("\nBye.")
+                    _save_history_silent(history_file)
+                    return
+
+            # Check for exit commands on first line
+            if not query_lines and line.upper() in ("EXIT", "QUIT", "\\Q"):
+                print("Bye.")
+                _save_history_silent(history_file)
+                return
+
+            # Check for special commands (only on first line)
+            if not query_lines and line.startswith("\\"):
+                if line == "\\schema":
+                    print(p.schema().to_string(index=False))
+                elif line == "\\coverage":
+                    print(p.coverage().to_string(index=False))
+                elif line == "\\tables":
+                    try:
+                        tables = p.sql("SHOW TABLES")
+                        print(tables.to_string(index=False))
+                    except Exception as e:
+                        print(f"  {e}")
+                elif line == "\\help":
+                    print("\nAvailable commands:")
+                    print("  \\schema   - Show column names and types")
+                    print("  \\coverage - Show column fill rates")
+                    print("  \\tables   - List all tables")
+                    print("  \\export <file> <format> - Export last query result to file")
+                    print("                        Formats: json, csv, xlsx, parquet")
+                    print("                        Example: \\export results.json xlsx")
+                    print("  \\help     - Show this help message")
+                    print("  EXIT       - Exit REPL")
+                    print("\nMulti-line queries:")
+                    print("  End with semicolon (;) or press Enter on empty line")
+                    print("  Example: SELECT *")
+                    print("           FROM data")
+                    print("           WHERE price > 100;")
+                    print("\nKeyboard shortcuts:")
+                    print("  Arrow Up/Down - Navigate command history")
+                    print("  Arrow Left/Right - Move cursor in current line")
+                    print("  Ctrl+A - Move to beginning of line")
+                    print("  Ctrl+E - Move to end of line")
+                    print("\nHistory:")
+                    print(f"  History file: {history_file}")
+                    print("  Commands are saved automatically and restored across sessions")
+                elif line.startswith("\\export"):
+                    parts = line.split(maxsplit=3)
+                    if len(parts) < 3:
+                        print("Usage: \\export <filename> <format>")
+                        print("Formats: json, csv, xlsx, parquet")
+                        print("Example: \\export results.json xlsx")
+                    else:
+                        _, filename, format_type = parts
+                        try:
+                            if p.last_result is None or p.last_result.empty:
+                                print("  No query result to export. Run a query first.")
+                            elif format_type == "csv":
+                                p.last_result.to_csv(filename, index=False)
+                                print(f"Exported \u2192 {filename}")
+                            elif format_type == "json":
+                                p.last_result.to_json(filename, orient="records", indent=2)
+                                print(f"Exported \u2192 {filename}")
+                            elif format_type == "parquet":
+                                p.last_result.to_parquet(filename, index=False)
+                                print(f"Exported \u2192 {filename}")
+                            elif format_type == "xlsx":
+                                try:
+                                    import openpyxl  # noqa: F401
+                                except ImportError:
+                                    print("  Error: openpyxl not installed. Install with: pip install openpyxl")
+                                    continue
+                                p.last_result.to_excel(filename, index=False, engine="openpyxl")
+                                print(f"Exported \u2192 {filename}")
+                            else:
+                                print(f"  Error: Unsupported format '{format_type}'")
+                        except Exception as e:
+                            print(f"  Error: {e}")
+                break  # Exit inner loop for special commands
+
+            # Handle empty lines
+            if not line:
+                if query_lines:
+                    # Empty line terminates multi-line query
+                    break
+                else:
+                    # Empty input at prompt - just continue
+                    continue
+
+            # Add line to query
+            query_lines.append(line)
+
+            # Check if query is complete
+            query_so_far = " ".join(query_lines)
+            # Check for semicolon at end
+            if line.endswith(";"):
+                break
+            # Check for complete single-statement keywords
+            upper_query = query_so_far.upper().strip()
+            complete_starts = (
+                "SELECT ", "INSERT ", "UPDATE ", "DELETE ", "CREATE ", "DROP ",
+                "ALTER ", "GRANT ", "REVOKE ", "SHOW ", "DESCRIBE ", "EXPLAIN ",
+                "WITH ", "PRAGMA "
+            )
+            # If query looks complete and doesn't end with incomplete syntax
+            if upper_query.endswith(";") or (
+                any(upper_query.startswith(s) for s in complete_starts)
+                and not any(upper_query.endswith(w) for w in ("AND", "OR", "WHERE", "WHEN", "CASE"))
+            ):
+                # Could be complete, but continue reading if semicolon not found
+                if ";" in upper_query:
+                    break
+
+            # Continue reading multi-line query
+            prompt = "...>"
+
+        # Skip if no query to execute (e.g., special commands)
+        if not query_lines:
+            # Save history and continue to next iteration
+            _save_history_silent(history_file)
             continue
 
-        # Add to readline history after execution (successful or not)
+        # Join query lines and remove trailing semicolon
+        query = " ".join(query_lines)
+        if query.endswith(";"):
+            query = query[:-1].strip()
+
+        # Add to readline history
         readline.add_history(query)
 
+        # Execute query
         try:
             result = p.sql(query)
             if result is not None and not result.empty:
@@ -274,9 +382,14 @@ def main(argv: list[str] | None = None) -> Processor | None:
         return None
 
     # ── Build config from CLI args ────────────────────────────
-    col_names = (
-        [c.strip() for c in args.col_names.split(",")] if args.col_names else None
-    )
+    col_names = None
+    if args.col_names:
+        col_names = []
+        for item in args.col_names:
+            if "," in item:
+                col_names.extend([c.strip() for c in item.split(",") if c.strip()])
+            else:
+                col_names.append(item.strip())
 
     config = ProcessorConfig(
         file=args.file,
@@ -297,23 +410,68 @@ def main(argv: list[str] | None = None) -> Processor | None:
     # ── Load data ─────────────────────────────────────────────
     try:
         p = load(config, formatter=formatter)  # @MX:NOTE: Pass formatter to loader (REQ-011)
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        print(f"Hint: Check that the file path is correct and the file exists.", file=sys.stderr)
+        sys.exit(1)
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
     # ── Handle output file redirection ────────────────────────
+    output_file = None
     if args.output is not None:
-        capture_output_to_file(p, args.output)
-        # Return early since output is already handled
-        return p
+        # Generate default filename with timestamp if not specified
+        if not args.output:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = f"duckdb_output_{timestamp}.txt"
+        else:
+            output_file = args.output
+        capture_output_to_file(p, output_file)
 
-    # ── Show info banner ──────────────────────────────────────
-    p.print_info()
+    # ── Show info banner (skip if output was redirected to file) ──────
+    if args.output is None:
+        p.print_info()
 
     # ── Run requested analyzers ───────────────────────────────
     if args.run:
-        names = [n.strip() for n in args.run.split(",")]
+        names = []
+        for item in args.run:
+            if "," in item:
+                names.extend([n.strip() for n in item.split(",") if n.strip()])
+            else:
+                names.append(item.strip())
         run_analyzers(p, names)
+
+        # ── Handle export format for analyst results ──────────
+        if args.export_format and p.last_result is not None and not p.last_result.empty:
+            # Generate export filename
+            if output_file:
+                # Use output filename as base, change extension
+                base_name = Path(output_file).stem
+                export_filename = f"{base_name}.{args.export_format}"
+            else:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                export_filename = f"duckdb_export_{timestamp}.{args.export_format}"
+
+            try:
+                if args.export_format == "csv":
+                    p.last_result.to_csv(export_filename, index=False)
+                elif args.export_format == "json":
+                    p.last_result.to_json(export_filename, orient="records", indent=2)
+                elif args.export_format == "parquet":
+                    p.last_result.to_parquet(export_filename, index=False)
+                elif args.export_format == "xlsx":
+                    try:
+                        import openpyxl  # noqa: F401
+                    except ImportError:
+                        print("Error: openpyxl not installed. Install with: pip install openpyxl")
+                        print("Or install with: pip install duckdb-processor[export]")
+                        return p
+                    p.last_result.to_excel(export_filename, index=False, engine="openpyxl")
+                print(f"Analysis results exported → {export_filename}")
+            except Exception as e:
+                print(f"Error exporting results: {e}")
 
     # ── Interactive REPL ──────────────────────────────────────
     if args.interactive:
@@ -363,4 +521,3 @@ def capture_output_to_file(p: Processor, output_file: str) -> None:
     print()
     # Show the info banner on console with original formatting
     p.print_info()
-

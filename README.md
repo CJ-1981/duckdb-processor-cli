@@ -54,10 +54,10 @@ python -m duckdb_processor data.csv --output
 python -m duckdb_processor data.csv --output results.txt
 
 # Run built-in demo analyst
-python -m duckdb_processor data.csv --run demo
+python -m duckdb_processor data.csv --run sample_data_demo
 
 # Run SQL examples analyst
-python -m duckdb_processor data.csv --run sql_examples
+python -m duckdb_processor data.csv --run sample_data_sql_examples
 
 # Interactive SQL mode
 python -m duckdb_processor data.csv --interactive
@@ -108,10 +108,10 @@ python -m duckdb_processor data.csv -o custom_name.txt
 python -m duckdb_processor --list-analyzers
 
 # Run single analyst
-python -m duckdb_processor data.csv --run demo
+python -m duckdb_processor data.csv --run sample_data_demo
 
 # Run multiple analysts
-python -m duckdb_processor data.csv --run demo,sql_examples
+python -m duckdb_processor data.csv --run sample_data_demo,sample_data_sql_examples
 ```
 
 ## Output Examples
@@ -156,6 +156,13 @@ sql> EXIT        -- Exit REPL
 
 ## Creating Custom Analysts
 
+**Quick Start:** See [ANALYST_EXAMPLES.md](ANALYST_EXAMPLES.md) for a comprehensive guide with 6 ready-to-use example analysts covering:
+- Basic filtering and aggregation patterns
+- Time series analysis
+- Data quality checks
+- Business metrics and KPIs
+- Python-native analysis (no SQL required)
+
 Create a new file in `duckdb_processor/analysts/`:
 
 ```python
@@ -186,8 +193,27 @@ class MyAnalysis(BaseAnalyzer):
 Run your analyst:
 
 ```bash
+# List all available analysts
+python -m duckdb_processor --list-analyzers
+
+# Run your analyst
 python -m duckdb_processor data.csv --run my_analysis
+
+# Run multiple analysts
+python -m duckdb_processor data.csv --run sample_data_demo,basic_patterns
 ```
+
+### Built-in Example Analysts
+
+- **`sample_data_demo`** - Comprehensive demo for sample_data.csv
+- **`sample_data_sql_examples`** - SQL query patterns for sample_data.csv
+- **`basic_patterns`** - Fundamental analysis for beginners (works with any data)
+- **`time_analysis`** - Time series and trend analysis (works with any data)
+- **`data_quality`** - Data validation and quality checks (works with any data)
+- **`business_metrics`** - KPIs, Pareto analysis, percentiles (works with any data)
+- **`python_patterns`** - Pure Python analysis (works with any data)
+
+See [ANALYST_EXAMPLES.md](ANALYST_EXAMPLES.md) for detailed documentation of each example.
 
 ## Development
 

@@ -71,6 +71,7 @@ class Processor:
             "n_records": n_records,
         }
         self.formatter = formatter  # Optional formatter for output (REQ-010, REQ-011)
+        self.last_result: pd.DataFrame | None = None  # Track last query result for export
 
     # ── Metadata ─────────────────────────────────────────────
 
@@ -129,7 +130,9 @@ class Processor:
         -------
         pandas.DataFrame
         """
-        return self.con.execute(query).df()
+        result = self.con.execute(query).df()
+        self.last_result = result  # Store for export
+        return result
 
     def preview(self, n: int = 10) -> pd.DataFrame:
         """Return the first *n* rows from the table."""
@@ -340,3 +343,74 @@ class Processor:
         q = query or f"SELECT * FROM {self.table}"
         self.con.execute(f"COPY ({q}) TO '{path}' (FORMAT PARQUET)")
         print(f"Exported \u2192 {path}")
+
+    def export_xlsx(self, path: str, query: str | None = None) -> None:
+        """Export a query result (or the full table) to Excel (XLSX).
+
+        Requires openpyxl to be installed: pip install duckdb-processor[export]
+
+        Parameters
+        ----------
+        path:
+            Destination file path (.xlsx extension recommended).
+        query:
+            SQL query whose results to export. ``None`` exports the entire table.
+        """
+        try:
+            from openpyxl import Workbook  # noqa: F401
+            from openpyxl.utils.dataframe import dataframe_to_rows  # noqa: F401
+        except ImportError:
+            print("Error: openpyxl not installed. Install with: pip install openpyxl")
+            print("Or install with: pip install duckdb_processor[export]")
+            return
+
+        q = query or f"SELECT * FROM {self.table}"
+        df = self.sql(q)
+
+        wb = Workbook()
+        ws = wb.active
+        if ws is not None:
+            ws.title = "Query Results"
+
+            # Write header
+            ws.append(list(df.columns))
+
+            # Write data rows
+            for row in dataframe_to_rows(df, index=False, header=False):
+                ws.append(row)
+
+            # Auto-adjust column widths (simplified)
+            for col_idx, col in enumerate(df.columns, start=1):
+                max_len = max(
+                    len(str(col)),
+                    df[col].astype(str).str.len().max() if not df.empty else 0
+                )
+                ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = min(50, (max_len + 2) * 1.2)  # type: ignore
+
+        wb.save(path)
+        print(f"Exported \u2192 {path}")
+
+    def export(self, path: str, format: str = "csv", query: str | None = None) -> None:
+        """Export query results to file in specified format.
+
+        Parameters
+        ----------
+        path:
+            Destination file path.
+        format:
+            Export format: csv, json, xlsx, parquet.
+        query:
+            SQL query whose results to export. ``None`` exports the entire table.
+        """
+        format = format.lower()
+
+        if format == "csv":
+            self.export_csv(path, query)
+        elif format == "json":
+            self.export_json(path, query)
+        elif format == "parquet":
+            self.export_parquet(path, query)
+        elif format == "xlsx":
+            self.export_xlsx(path, query)
+        else:
+            print(f"Error: Unsupported format '{format}'. Supported: csv, json, xlsx, parquet")

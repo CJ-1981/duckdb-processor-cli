@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Analyst file naming** - Renamed demo analysts to match their associated data files:
+  - `demo.py` → `sample_data_demo.py` (class: `DemoAnalysis` → `SampleDataDemo`)
+  - `sql_examples.py` → `sample_data_sql_examples.py` (class: `SQLExamples` → `SampleDataSQLExamples`)
+  - Analyst names updated: `demo` → `sample_data_demo`, `sql_examples` → `sample_data_sql_examples`
+  - Improves organization by clearly associating analysts with their data files
+  - Updated all documentation references to use new names
+
+### Added
+- **CLI export format support** - New `--export-format` flag to export analyst query results:
+  - Works with `--run` flag: `python -m duckdb_processor data.csv --run demo --export-format csv`
+  - Supports formats: csv, json, xlsx, parquet
+  - Automatically generates filename: `duckdb_export_YYYYMMDD_HHMMSS.<format>`
+  - Can be combined with `--output` to save info banner and export results
+- **Business Logic Pattern Examples** - Six new example analysts for quick learning:
+  - **`basic_patterns`** - Fundamental filtering, grouping, and aggregation (beginner-friendly)
+  - **`time_analysis`** - Time series analysis: trends, moving averages, period-over-period growth
+  - **`data_quality`** - Data validation: missing values, duplicates, outliers, freshness
+  - **`business_metrics`** - KPIs: Pareto (80/20), percentiles, concentration ratio
+  - **`python_patterns`** - Pure Python analysis using pandas (no SQL required)
+  - **`sql_examples`** - Common SQL query patterns and examples
+  - Includes detailed inline comments and business context
+  - Beginner-friendly with both SQL and Python approaches
+  - New **[ANALYST_EXAMPLES.md](ANALYST_EXAMPLES.md)** documentation guide
+- **Query Result Export** - New `\export <file> <format>` REPL command to export the last query result:
+  - Formats: csv, json, xlsx, parquet
+  - Example: `\export results.json xlsx`
+  - Requires openpyxl for Excel export: `pip install duckdb-processor[export]`
+- **Last result tracking** - Processor now tracks last query result for easy export via `p.last_result`
+- **Multi-line SQL queries** - REPL now supports multi-line SQL input:
+  - End queries with semicolon (;) or press Enter on empty line
+  - Continuation prompt (...>) shows incomplete query
+  - Example:
+    ```
+    sql> SELECT *
+    ...> FROM data
+    ...> WHERE price > 100
+    ...> AND category = 'Electronics'
+    ...> ;
+    ```
+- **File not found hang** - Fixed issue where app would hang when input file doesn't exist. Now shows clear error message and exits immediately instead of blocking on stdin.
+
+### Added
+- **CLI export format support** - New `--export-format` flag to export analyst query results:
+  - Works with `--run` flag: `python -m duckdb_processor data.csv --run demo --export-format csv`
+  - Supports formats: csv, json, xlsx, parquet
+  - Automatically generates filename: `duckdb_export_YYYYMMDD_HHMMSS.<format>`
+  - Can be combined with `--output` to save info banner and export results
+- **Query Result Export** - New `\export <file> <format>` REPL command to export the last query result:
+- **Query Result Export** - New `\export <file> <format>` REPL command to export the last query result:
+  - Formats: csv, json, xlsx, parquet
+  - Example: `\export results.json xlsx`
+  - Requires openpyxl for Excel export: `pip install duckdb-processor[export]`
+- **Last result tracking** - Processor now tracks last query result for easy export via `p.last_result`
+- **Multi-line SQL queries** - REPL now supports multi-line SQL input:
+  - End queries with semicolon (;) or press Enter on empty line
+  - Continuation prompt (...>) shows incomplete query
+  - Example:
+    ```
+    sql> SELECT *
+    ...> FROM data
+    ...> WHERE price > 100
+    ...> AND category = 'Electronics'
+    ...> ;
+    ```
+
 ### Fixed
 - **REPL character retention bug** - Fixed issue where characters from previous input were retained in new input. Added `readline.clear_history()` at REPL start to prevent state pollution.
 - **REPL history permission error** - Fixed PermissionError when reading/writing history file. Added robust error handling for PermissionError and OSError to gracefully handle read-only filesystems or missing history files.

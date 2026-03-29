@@ -1,2 +1,0 @@
-[console_scripts]
-duckdb-processor = duckdb_processor.cli:main

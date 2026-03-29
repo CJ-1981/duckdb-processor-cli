@@ -17,6 +17,10 @@ dependencies = [
 dev = [
     "pytest>=7.0",
 ]
+export = [
+    "openpyxl>=3.0.0",  # Excel export
+    "pyarrow>=10.0.0",  # Parquet export
+]
 
 [project.scripts]
 duckdb-processor = "duckdb_processor.cli:main"
