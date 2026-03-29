@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
+from io import StringIO
+from pathlib import Path
 
 from .analyzer import list_analyzers, run_analyzers
 from .config import ProcessorConfig
@@ -115,6 +118,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable progress indicators (REQ-018)",
     )
+    ap.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        nargs="?",
+        const="",
+        help="Save output to file (default: duckdb_output_YYYYMMDD_HHMMSS.txt if no filename specified)",
+    )
 
     return ap
 
@@ -216,6 +227,12 @@ def main(argv: list[str] | None = None) -> Processor | None:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    # ── Handle output file redirection ────────────────────────
+    if args.output is not None:
+        capture_output_to_file(p, args.output)
+        # Return early since output is already handled
+        return p
+
     # ── Show info banner ──────────────────────────────────────
     p.print_info()
 
@@ -229,3 +246,41 @@ def main(argv: list[str] | None = None) -> Processor | None:
         interactive_repl(p)
 
     return p
+
+
+def capture_output_to_file(p: Processor, output_file: str) -> None:
+    """Capture processor output and write to file.
+
+    Args:
+        p: Processor instance
+        output_file: Path to output file
+    """
+    # Generate default filename with timestamp if not specified
+    if not output_file:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = f"duckdb_output_{timestamp}.txt"
+
+    output_path = Path(output_file)
+
+    # Capture stdout
+    old_stdout = sys.stdout
+    captured_output = StringIO()
+
+    try:
+        sys.stdout = captured_output
+
+        # Run the same output sequence as normal main flow
+        p.print_info()
+
+        # Note: Analyzers and interactive mode are not captured to file
+        # Only the info banner is captured when --output is used
+
+    finally:
+        sys.stdout = old_stdout
+
+    # Write captured output to file
+    output_path.write_text(captured_output.getvalue())
+
+    # Also print to console so user sees what happened
+    print(f"Output saved to: {output_path}")
+    print(captured_output.getvalue(), end="")
