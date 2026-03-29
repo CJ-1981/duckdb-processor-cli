@@ -5,6 +5,7 @@ Parsed by :func:`main` and exposed via ``python -m duckdb_processor``.
 from __future__ import annotations
 
 import argparse
+import readline
 import sys
 from datetime import datetime
 from io import StringIO
@@ -131,20 +132,32 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def interactive_repl(p: Processor) -> None:
-    """Minimal interactive SQL REPL.
+    """Enhanced interactive SQL REPL with readline support.
 
-    Special commands:
+    Features:
+    - Arrow keys for cursor movement and inline editing
+    - Command history (up/down arrows)
+    - Special commands: \\schema, \\coverage, \\tables, \\help
+
+    Special Commands:
     * ``EXIT`` / ``QUIT`` / ``\\q`` — quit the REPL.
     * ``\\schema`` — show column names and types.
     * ``\\coverage`` — show column fill rates.
-    * Everything else is executed as SQL.
+    * ``\\tables`` — list all tables in database.
+    * ``\\help`` — show help message.
     """
     print("\n── Interactive SQL REPL ─────────────────────────────────")
     print(
-        f"  Table: '{p.table}'  |  Type EXIT to quit  |  "
-        r"\schema for columns"
+        f"  Table: '{p.table}'  |  Type \\help for commands  |  "
+        r"Type EXIT to quit"
     )
     print("─" * 58)
+    print("Tips: Use arrow keys for history and cursor movement")
+
+    # Setup readline for better keyboard support
+    readline.parse_and_bind("tab: complete")
+    readline.parse_and_bind("set show-all-if-ambiguous on")
+    readline.parse_and_bind("set editing-mode emacs")
 
     while True:
         try:
@@ -164,11 +177,35 @@ def interactive_repl(p: Processor) -> None:
         if query == "\\coverage":
             print(p.coverage().to_string(index=False))
             continue
+        if query == "\\tables":
+            try:
+                tables = p.sql("SHOW TABLES")
+                print(tables.to_string(index=False))
+            except Exception as e:
+                print(f"  {e}")
+            continue
+        if query == "\\help":
+            print("\nAvailable commands:")
+            print("  \\schema   - Show column names and types")
+            print("  \\coverage - Show column fill rates")
+            print("  \\tables   - List all tables")
+            print("  \\help     - Show this help message")
+            print("  EXIT       - Exit REPL")
+            print("\nKeyboard shortcuts:")
+            print("  Arrow Up/Down - Navigate command history")
+            print("  Arrow Left/Right - Move cursor in current line")
+            print("  Ctrl+A - Move to beginning of line")
+            print("  Ctrl+E - Move to end of line")
+            continue
 
         try:
-            print(p.sql(query).to_string(index=False))
+            result = p.sql(query)
+            if result is not None and not result.empty:
+                print(result.to_string(index=False))
+            else:
+                print("Query executed successfully (no results)")
         except Exception as e:
-            print(f"  {e}")
+            print(f"  Error: {e}")
 
 
 def main(argv: list[str] | None = None) -> Processor | None:
@@ -249,12 +286,14 @@ def main(argv: list[str] | None = None) -> Processor | None:
 
 
 def capture_output_to_file(p: Processor, output_file: str) -> None:
-    """Capture processor output and write to file.
+    """Capture processor output and write to file (plain text, no Rich formatting).
 
     Args:
         p: Processor instance
         output_file: Path to output file
     """
+    from .formatters import SimpleFormatter
+
     # Generate default filename with timestamp if not specified
     if not output_file:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -262,25 +301,29 @@ def capture_output_to_file(p: Processor, output_file: str) -> None:
 
     output_path = Path(output_file)
 
-    # Capture stdout
-    old_stdout = sys.stdout
+    # Capture plain text output to file using SimpleFormatter
+    old_formatter = p.formatter
     captured_output = StringIO()
 
     try:
+        # Temporarily switch to SimpleFormatter for plain text output
+        p.formatter = SimpleFormatter()
+
+        # Capture to string
+        old_stdout = sys.stdout
         sys.stdout = captured_output
-
-        # Run the same output sequence as normal main flow
         p.print_info()
-
-        # Note: Analyzers and interactive mode are not captured to file
-        # Only the info banner is captured when --output is used
+        sys.stdout = old_stdout
 
     finally:
-        sys.stdout = old_stdout
+        p.formatter = old_formatter  # Restore original formatter
 
     # Write captured output to file
     output_path.write_text(captured_output.getvalue())
 
-    # Also print to console so user sees what happened
+    # Print confirmation and show output on console using original formatter
     print(f"Output saved to: {output_path}")
-    print(captured_output.getvalue(), end="")
+    print()
+    # Show the info banner on console with original formatting
+    p.print_info()
+
