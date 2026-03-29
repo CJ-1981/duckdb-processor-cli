@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **REPL history bug** - Fixed issue where first character from previous input was retained in new input. Added proper readline history management with persistent history file (`~/.duckdb_processor_history`).
 - **Output file formatting** - Output files now contain plain text instead of Rich formatting codes (ANSI escape sequences). Uses SimpleFormatter when writing to files while preserving Rich formatting on console.
 
 ### Enhanced

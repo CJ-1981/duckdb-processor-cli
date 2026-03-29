@@ -159,17 +159,34 @@ def interactive_repl(p: Processor) -> None:
     readline.parse_and_bind("set show-all-if-ambiguous on")
     readline.parse_and_bind("set editing-mode emacs")
 
+    # Initialize history file for persistent history across sessions
+    history_file = Path.home() / ".duckdb_processor_history"
+    try:
+        readline.read_history_file(str(history_file))
+    except FileNotFoundError:
+        pass  # No history file yet, that's fine
+
     while True:
         try:
             query = input("\nsql> ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nBye.")
+            # Save history before exiting
+            try:
+                readline.write_history_file(str(history_file))
+            except Exception:
+                pass
             break
 
         if not query:
             continue
         if query.upper() in ("EXIT", "QUIT", "\\Q"):
             print("Bye.")
+            # Save history before exiting
+            try:
+                readline.write_history_file(str(history_file))
+            except Exception:
+                pass
             break
         if query == "\\schema":
             print(p.schema().to_string(index=False))
@@ -196,7 +213,13 @@ def interactive_repl(p: Processor) -> None:
             print("  Arrow Left/Right - Move cursor in current line")
             print("  Ctrl+A - Move to beginning of line")
             print("  Ctrl+E - Move to end of line")
+            print("\nHistory:")
+            print(f"  History file: {history_file}")
+            print("  Commands are saved automatically and restored across sessions")
             continue
+
+        # Add to readline history after execution (successful or not)
+        readline.add_history(query)
 
         try:
             result = p.sql(query)
@@ -206,6 +229,12 @@ def interactive_repl(p: Processor) -> None:
                 print("Query executed successfully (no results)")
         except Exception as e:
             print(f"  Error: {e}")
+        finally:
+            # Auto-save history after each command
+            try:
+                readline.write_history_file(str(history_file))
+            except Exception:
+                pass
 
 
 def main(argv: list[str] | None = None) -> Processor | None:
