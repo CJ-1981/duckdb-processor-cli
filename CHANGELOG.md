@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **REPL character retention bug** - Fixed issue where characters from previous input were retained in new input. Added `readline.clear_history()` at REPL start to prevent state pollution.
 - **REPL history permission error** - Fixed PermissionError when reading/writing history file. Added robust error handling for PermissionError and OSError to gracefully handle read-only filesystems or missing history files.
 - **REPL history bug** - Fixed issue where first character from previous input was retained in new input. Added proper readline history management with persistent history file (`~/.duckdb_processor_history`).
 - **Output file formatting** - Output files now contain plain text instead of Rich formatting codes (ANSI escape sequences). Uses SimpleFormatter when writing to files while preserving Rich formatting on console.

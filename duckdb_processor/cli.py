@@ -167,6 +167,9 @@ def interactive_repl(p: Processor) -> None:
     print("─" * 58)
     print("Tips: Use arrow keys for history and cursor movement")
 
+    # Clear any existing readline state to prevent character retention
+    readline.clear_history()
+
     # Setup readline for better keyboard support
     readline.parse_and_bind("tab: complete")
     readline.parse_and_bind("set show-all-if-ambiguous on")
