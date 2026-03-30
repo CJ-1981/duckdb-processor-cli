@@ -89,6 +89,9 @@ def _discover_analyzers():
         
     import importlib
     import pkgutil
+    import sys
+    import os
+    import importlib.util
     import duckdb_processor.analysts as analysts_pkg
     
     for _, module_name, _ in pkgutil.iter_modules(analysts_pkg.__path__):
@@ -96,8 +99,25 @@ def _discover_analyzers():
         try:
             importlib.import_module(full_module_name)
         except Exception as e:
-            import sys
             print(f"Warning: Failed to load analyzer module '{full_module_name}': {e}", file=sys.stderr)
+            
+    # Discover external plugins
+    base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
+    plugins_dir = os.path.join(base_dir, "analysts_plugins")
+    
+    if os.path.exists(plugins_dir):
+        for filename in os.listdir(plugins_dir):
+            if filename.endswith(".py") and not filename.startswith("_"):
+                module_name = filename[:-3]
+                path = os.path.join(plugins_dir, filename)
+                try:
+                    spec = importlib.util.spec_from_file_location(module_name, path)
+                    if spec and spec.loader:
+                        module = importlib.util.module_from_spec(spec)
+                        sys.modules[module_name] = module
+                        spec.loader.exec_module(module)
+                except Exception as e:
+                    print(f"Warning: Failed to load plugin '{filename}': {e}", file=sys.stderr)
             
     _discovered = True
 

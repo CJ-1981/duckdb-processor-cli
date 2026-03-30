@@ -2,6 +2,15 @@ import gradio as gr
 import pandas as pd
 import sqlparse
 import json
+import os
+import shutil
+import sys
+import logging
+import traceback
+
+# Set up logging to see debug info in the terminal
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 from duckdb_processor.loader import load
 from duckdb_processor.config import ProcessorConfig
@@ -13,6 +22,7 @@ global_processor = None
 def load_data(file_obj, header, kv):
     """Load the CSV into DuckDB via Processor API and return preview."""
     global global_processor
+    logger.info(f"Loading data: file={file_obj.name if file_obj else 'None'}, header={header}, kv={kv}")
     if file_obj is None:
         return "Please upload a CSV file.", None
     
@@ -26,18 +36,22 @@ def load_data(file_obj, header, kv):
         info_str = json.dumps(info, indent=2)
         
         preview_df = global_processor.preview(100)
+        logger.info("Data loaded successfully.")
         return f"✅ Data Loaded Successfully\n\n{info_str}", preview_df
     except Exception as e:
-        return f"❌ Error loading data: {e}", None
+        error_msg = f"❌ Error loading data: {e}"
+        logger.error(f"{error_msg}\n{traceback.format_exc()}")
+        return error_msg, None
 
-def run_analysis(analyzer_name):
+def run_analysis(analyzer_name, max_rows, max_cols):
     """Run the selected analyzer against the loaded processor."""
     global global_processor
+    logger.info(f"Running analysis: {analyzer_name}, max_rows={max_rows}, max_cols={max_cols}")
     if global_processor is None:
-        return "❌ Error: Please load data first (go to Data Preview tab).", None
+        return "❌ Error: Please load data first (go to Data Preview tab).", gr.update()
     
     if not analyzer_name:
-        return "⚠️ Please select an analyzer from the dropdown.", None
+        return "⚠️ Please select an analyzer from the dropdown.", gr.update()
     
     try:
         analyzer = get_analyzer(analyzer_name)
@@ -45,26 +59,45 @@ def run_analysis(analyzer_name):
         
         df = global_processor.last_result
         if df is None or df.empty:
-            return f"✅ Analyzer '{analyzer_name}' ran successfully, but returned no results.", None
+            return f"✅ Analyzer '{analyzer_name}' ran successfully, but returned no results.", gr.update(), gr.update()
+            
+        # Calculate dynamic height
+        height_px = int(max_rows) * 35 + 80
         
-        return f"✅ Analyzer '{analyzer_name}' ran successfully! Showing results:", df
+        # Instead of hiding columns, we force min-width via CSS to control visual "width"
+        # If max_cols is 5, we make columns wider; if 50, we make them narrower to fit more.
+        col_width = 150 if max_cols == "All" else (1500 // int(max_cols))
+        style_injection = f"<style>#analysis-results td, #analysis-results th {{ min-width: {col_width}px !important; }}</style>"
+        
+        return f"✅ Analyzer '{analyzer_name}' ran successfully!", gr.update(value=df, max_height=height_px), style_injection
     except Exception as e:
-        return f"❌ Error running analyzer: {e}", None
+        error_msg = f"❌ Error running analyzer: {e}"
+        logger.error(error_msg)
+        return error_msg, gr.update(), gr.update()
 
-def execute_sql(query):
+def execute_sql(query, max_rows, max_cols):
     """Run arbitrary SQL from the SQL Editor."""
     global global_processor
+    logger.info(f"Executing SQL query, max_rows={max_rows}, max_cols={max_cols}")
     if global_processor is None:
-        return "❌ Error: Please load data first (go to Data Preview tab).", None
+        return "❌ Error: Please load data first (go to Data Preview tab).", gr.update()
     
     if not query or not query.strip():
-        return "⚠️ Query is empty.", None
+        return "⚠️ Query is empty.", gr.update()
     
     try:
         df = global_processor.sql(query)
-        return f"✅ Query executed successfully! Returned {len(df)} rows.", df
+        total_rows = len(df)
+        
+        height_px = int(max_rows) * 35 + 80
+        col_width = 150 if max_cols == "All" else (1500 // int(max_cols))
+        style_injection = f"<style>#sql-results td, #sql-results th {{ min-width: {col_width}px !important; }}</style>"
+        
+        return f"✅ Query executed successfully! Returned {total_rows} total rows.", gr.update(value=df, max_height=height_px), style_injection
     except Exception as e:
-        return f"❌ Error executing SQL: {e}", None
+        error_msg = f"❌ Error executing SQL: {e}"
+        logger.error(error_msg)
+        return error_msg, gr.update(), gr.update()
 
 def prettify_sql(query):
     """Format SQL query using sqlparse."""
@@ -81,11 +114,36 @@ def get_analyzer_choices():
     except Exception:
         return []
 
+def upload_plugin(file_obj):
+    if file_obj is None:
+        return "⚠️ No file uploaded.", gr.update()
+    
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.getcwd()
+        
+    plugins_dir = os.path.join(base_dir, "analysts_plugins")
+    os.makedirs(plugins_dir, exist_ok=True)
+    
+    filename = os.path.basename(file_obj.name)
+    if not filename.endswith('.py'):
+        return "❌ Error: Only .py files are supported for plugins.", gr.update()
+        
+    dest_path = os.path.join(plugins_dir, filename)
+    shutil.copy(file_obj.name, dest_path)
+    
+    # Reload analyzer dropdown by forcing discovery again
+    import duckdb_processor.analyzer as analyzer_mod
+    analyzer_mod._discovered = False
+    
+    new_choices = get_analyzer_choices()
+    return f"✅ Plugin '{filename}' installed successfully!", gr.update(choices=new_choices)
+
 # Custom CSS for UI polish
 custom_css = """
-/* Enhance dataframe visibility and allow resizing */
+/* Enhance dataframe visibility */
 .gradio-dataframe table { border-collapse: collapse; }
-.gradio-dataframe { resize: vertical; overflow: auto; min-height: 400px; }
 
 /* Custom coloring for SQL code blocks */
 .cm-s-default .cm-keyword { color: #d73a49; font-weight: bold; }
@@ -140,29 +198,54 @@ def create_ui():
                     # TAB 2: Analysts
                     # -----------------------------
                     with gr.Tab("Run Analytics"):
-                        gr.Markdown("### 📈 Built-in Analyzers")
-                        gr.Markdown("Select an analyst script to run complex data transformations.")
+                        gr.Markdown("### 📈 Built-in and Custom Analyzers")
+                        gr.Markdown("Select an analyst script to run complex data transformations. You can also drag-and-drop a `.py` file here to load custom local plugins on the fly.")
                         
                         analyzer_choices = get_analyzer_choices()
-                        analyzer_dropdown = gr.Dropdown(
-                            choices=analyzer_choices, 
-                            label="Select Analyzer", 
-                            info="These reflect the scripts found in analysts/"
-                        )
-                        run_analyzer_btn = gr.Button("▶ Run Analyzer", variant="primary")
+                        
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                analyzer_dropdown = gr.Dropdown(
+                                    choices=analyzer_choices, 
+                                    label="Select Analyzer", 
+                                    info="Included analysts and dropped plugins"
+                                )
+                                row_slider_analysis = gr.Dropdown(
+                                    choices=[15, 25, 50, 100, 200], 
+                                    value=50, 
+                                    label="Max entries to show (Height)"
+                                )
+                                col_dropdown_analysis = gr.Dropdown(
+                                    choices=["5", "10", "20", "50", "All"], 
+                                    value="All", 
+                                    label="Max columns to show (Width)"
+                                )
+                                run_analyzer_btn = gr.Button("▶ Run Analyzer", variant="primary")
+                                
+                            with gr.Column(scale=1):
+                                plugin_upload = gr.File(label="Drop custom plugin script (.py)", file_types=[".py"])
+                                plugin_status = gr.Textbox(label="Plugin Status", lines=1, interactive=False)
                         
                         analyzer_status = gr.Textbox(label="Status", lines=1, interactive=False)
                         analyzer_results = gr.Dataframe(
                             label="Analysis Results",
                             interactive=False,
                             wrap=True,
-                            row_count=(15, "dynamic")
+                            elem_id="analysis-results",
+                            max_height=575
+                        )
+                        analysis_css_override = gr.HTML("")
+                        
+                        plugin_upload.upload(
+                            fn=upload_plugin,
+                            inputs=[plugin_upload],
+                            outputs=[plugin_status, analyzer_dropdown]
                         )
                         
                         run_analyzer_btn.click(
                             fn=run_analysis,
-                            inputs=[analyzer_dropdown],
-                            outputs=[analyzer_status, analyzer_results]
+                            inputs=[analyzer_dropdown, row_slider_analysis, col_dropdown_analysis],
+                            outputs=[analyzer_status, analyzer_results, analysis_css_override]
                         )
 
                     # -----------------------------
@@ -184,13 +267,25 @@ def create_ui():
                             format_btn = gr.Button("✨ Prettify SQL")
                             run_sql_btn = gr.Button("▶ Run SQL", variant="primary")
                         
+                        row_slider_sql = gr.Dropdown(
+                            choices=[15, 25, 50, 100, 200], 
+                            value=50, 
+                            label="Max entries to show (Height)"
+                        )
+                        col_dropdown_sql = gr.Dropdown(
+                            choices=["5", "10", "20", "50", "All"], 
+                            value="All", 
+                            label="Max columns to show (Width)"
+                        )
                         sql_status = gr.Textbox(label="Execution Status", lines=2, interactive=False)
                         sql_results = gr.Dataframe(
                             label="Query Results",
                             interactive=False,
                             wrap=True,
-                            row_count=(15, "dynamic")
+                            elem_id="sql-results",
+                            max_height=575
                         )
+                        sql_css_override = gr.HTML("")
                         
                         format_btn.click(
                             fn=prettify_sql,
@@ -200,9 +295,30 @@ def create_ui():
                         
                         run_sql_btn.click(
                             fn=execute_sql,
-                            inputs=[sql_input],
-                            outputs=[sql_status, sql_results]
+                            inputs=[sql_input, row_slider_sql, col_dropdown_sql],
+                            outputs=[sql_status, sql_results, sql_css_override]
                         )
+
+        # Floating Back to Top Button (Fixed position)
+        gr.HTML("""
+            <button id='back-to-top' 
+                    onclick='window.scrollTo({top: 0, behavior: "smooth"}); 
+                             document.querySelector(".gradio-container")?.scrollTo({top: 0, behavior: "smooth"});
+                             document.body.scrollTo({top: 0, behavior: "smooth"});'
+                    style='position: fixed; bottom: 30px; right: 30px; z-index: 1000; 
+                           width: 50px; height: 50px; border-radius: 50%; 
+                           background-color: #2563eb; color: white; border: none; 
+                           box-shadow: 0 4px 12px rgba(0,0,0,0.15); cursor: pointer; 
+                           display: flex; align-items: center; justify-content: center; 
+                           font-size: 20px; transition: transform 0.2s, background-color 0.2s;'
+                    onmouseover='this.style.transform="scale(1.1)"; this.style.backgroundColor="#1d4ed8";'
+                    onmouseout='this.style.transform="scale(1.0)"; this.style.backgroundColor="#2563eb";'>
+                ⬆️
+            </button>
+        """)
+
+        # Footer with Build Version
+        gr.HTML("<div style='text-align: center; margin-top: 50px; padding-bottom: 30px; color: #888; font-size: 12px;'>DuckDB Processor UI - Build Version: 1.0.5</div>")
 
     return app, theme, custom_css
 
