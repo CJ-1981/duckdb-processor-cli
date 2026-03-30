@@ -16,8 +16,105 @@ from duckdb_processor.loader import load
 from duckdb_processor.config import ProcessorConfig
 from duckdb_processor.analyzer import list_analyzers, get_analyzer
 
+import plotly.express as px
+import plotly.graph_objects as go
+
+# SQL Patterns Library
+SQL_PATTERNS = {
+    "Select Top 10": "SELECT * FROM data LIMIT 10;",
+    "Count by Category": "SELECT category, COUNT(*) as count FROM data GROUP BY category ORDER BY count DESC;",
+    "Sum by Category": "SELECT category, SUM(TRY_CAST(amount AS DOUBLE)) as total FROM data GROUP BY category ORDER BY total DESC;",
+    "Missing Values Check": "SELECT * FROM (SELECT 'all_columns' as col, COUNT(*) as total FROM data) CROSS JOIN (SELECT count(*) as missing FROM data WHERE column_name IS NULL); -- Edit column_name",
+    "Date Trend (Daily)": "SELECT CAST(date AS DATE) as d, COUNT(*) as count FROM data GROUP BY d ORDER BY d;",
+    "Value Distribution": "SELECT amount, COUNT(*) as count FROM data GROUP BY amount ORDER BY count DESC LIMIT 20;"
+}
+
 # Global state for a single-user local app
 global_processor = None
+query_history = []
+
+def get_schema_info():
+    """Fetch schema as a string for display."""
+    global global_processor
+    if global_processor is None:
+        return "No data loaded."
+    try:
+        df = global_processor.schema()
+        return df.to_string(index=False)
+    except Exception as e:
+        return f"Error fetching schema: {e}"
+
+def get_data_health():
+    """Fetch coverage and return a Plotly figure."""
+    global global_processor
+    if global_processor is None:
+        return None, "No data loaded."
+    try:
+        df = global_processor.coverage()
+        fig = px.bar(
+            df, 
+            x="column", 
+            y="coverage_%", 
+            title="Data Coverage per Column (%)",
+            labels={"coverage_%": "Coverage Percentage", "column": "Column Name"},
+            range_y=[0, 100],
+            color="coverage_%",
+            color_continuous_scale="RdYlGn"
+        )
+        fig.update_layout(showlegend=False)
+        return fig, df
+    except Exception as e:
+        return None, f"Error calculating health: {e}"
+
+def export_results(format):
+    """Export the last result to a file and return the path."""
+    global global_processor
+    if global_processor is None or global_processor.last_result is None:
+        return None
+    
+    try:
+        filename = f"duck_export_{format}.{format}"
+        path = os.path.abspath(filename)
+        # Handle excel case as special if it doesn't support the generic export
+        global_processor.export(path, format=format)
+        return path
+    except Exception as e:
+        logger.error(f"Export error: {e}")
+        return None
+
+def generate_auto_chart(df):
+    """Attempt to generate a relevant chart from a dataframe."""
+    if df is None or df.empty:
+        return None
+    
+    try:
+        cols = df.columns
+        if len(cols) < 2:
+            return None
+        
+        # Try to find a numeric column for Y and categorical/date for X
+        numeric_cols = df.select_dtypes(include=['number', 'float', 'int']).columns.tolist()
+        other_cols = [c for c in cols if c not in numeric_cols]
+        
+        if not numeric_cols:
+            # If no numeric, try bar chart of counts for the first column
+            counts = df[cols[0]].value_counts().reset_index()
+            counts.columns = [cols[0], "count"]
+            return px.bar(counts, x=cols[0], y="count", title=f"Frequency of {cols[0]}")
+        
+        x_col = other_cols[0] if other_cols else cols[0]
+        y_col = numeric_cols[0]
+        
+        # Categorize x types for better labels
+        if "date" in x_col.lower() or "time" in x_col.lower():
+            fig = px.line(df, x=x_col, y=y_col, title=f"{y_col} over {x_col}")
+        else:
+            fig = px.bar(df, x=x_col, y=y_col, title=f"{y_col} by {x_col}")
+        
+        return fig
+    except Exception as e:
+        logger.error(f"Chart error: {e}")
+        return None
 
 def load_data(file_obj, header, kv):
     """Load the CSV into DuckDB via Processor API and return preview."""
@@ -36,12 +133,21 @@ def load_data(file_obj, header, kv):
         info_str = json.dumps(info, indent=2)
         
         preview_df = global_processor.preview(100)
+        schema_str = get_schema_info()
+        health_fig, health_df = get_data_health()
+        
         logger.info("Data loaded successfully.")
-        return f"✅ Data Loaded Successfully\n\n{info_str}", preview_df
+        return (
+            f"✅ Data Loaded Successfully\n\n{info_str}", 
+            preview_df, 
+            schema_str, 
+            health_fig,
+            health_df
+        )
     except Exception as e:
         error_msg = f"❌ Error loading data: {e}"
         logger.error(f"{error_msg}\n{traceback.format_exc()}")
-        return error_msg, None
+        return error_msg, None, "Error", None, None
 
 def run_analysis(analyzer_name, max_rows, max_cols):
     """Run the selected analyzer against the loaded processor."""
@@ -69,11 +175,13 @@ def run_analysis(analyzer_name, max_rows, max_cols):
         col_width = 150 if max_cols == "All" else (1500 // int(max_cols))
         style_injection = f"<style>#analysis-results td, #analysis-results th {{ min-width: {col_width}px !important; }}</style>"
         
-        return f"✅ Analyzer '{analyzer_name}' ran successfully!", gr.update(value=df, max_height=height_px), style_injection
+        chart_fig = generate_auto_chart(df)
+        
+        return f"✅ Analyzer '{analyzer_name}' ran successfully!", gr.update(value=df, max_height=height_px), style_injection, chart_fig
     except Exception as e:
         error_msg = f"❌ Error running analyzer: {e}"
         logger.error(error_msg)
-        return error_msg, gr.update(), gr.update()
+        return error_msg, gr.update(), gr.update(), None
 
 def execute_sql(query, max_rows, max_cols):
     """Run arbitrary SQL from the SQL Editor."""
@@ -93,17 +201,36 @@ def execute_sql(query, max_rows, max_cols):
         col_width = 150 if max_cols == "All" else (1500 // int(max_cols))
         style_injection = f"<style>#sql-results td, #sql-results th {{ min-width: {col_width}px !important; }}</style>"
         
-        return f"✅ Query executed successfully! Returned {total_rows} total rows.", gr.update(value=df, max_height=height_px), style_injection
+        # Add to history
+        if query not in query_history:
+            query_history.insert(0, query)
+            if len(query_history) > 20: query_history.pop()
+        
+        chart_fig = generate_auto_chart(df)
+        
+        return (
+            f"✅ Query executed successfully! Returned {total_rows} total rows.", 
+            gr.update(value=df, max_height=height_px), 
+            style_injection,
+            gr.update(choices=query_history),
+            chart_fig
+        )
     except Exception as e:
         error_msg = f"❌ Error executing SQL: {e}"
         logger.error(error_msg)
-        return error_msg, gr.update(), gr.update()
+        return error_msg, gr.update(), gr.update(), gr.update(), None
 
-def prettify_sql(query):
-    """Format SQL query using sqlparse."""
-    if not query or not query.strip():
+def update_sql_from_selection(pattern_name):
+    """Update SQL input from pattern library."""
+    if pattern_name in SQL_PATTERNS:
+        return SQL_PATTERNS[pattern_name]
+    return gr.update()
+
+def apply_historical_query(query):
+    """Update SQL input from history."""
+    if query:
         return query
-    return sqlparse.format(query, reindent=True, keyword_case='upper')
+    return gr.update()
 
 def get_analyzer_choices():
     """Retrieve available analyzers for the dropdown."""
@@ -160,7 +287,7 @@ def create_ui():
         button_primary_background_fill_hover="*primary_600",
     )
     
-    with gr.Blocks(title="DuckDB Processor UI") as app:
+    with gr.Blocks(title="DuckDB Processor UI", css=custom_css) as app:
         gr.Markdown("# 🦆 DuckDB CSV Processor")
         gr.Markdown("An interactive dashboard to explore, transform, and analyze your CSV data quickly.")
         
@@ -174,9 +301,12 @@ def create_ui():
                 
                 load_btn = gr.Button("Load Data", variant="primary")
                 info_box = gr.Textbox(label="Data Info & Status", lines=10, interactive=False)
+                
+                # Schema sidebar component
+                schema_sidebar = gr.Code(label="Table Schema", language="sql", interactive=False, lines=15)
             
             with gr.Column(scale=3):
-                with gr.Tabs():
+                with gr.Tabs() as main_tabs:
                     # -----------------------------
                     # TAB 1: Data Preview
                     # -----------------------------
@@ -188,18 +318,20 @@ def create_ui():
                             wrap=True,
                             row_count=(10, "dynamic")
                         )
-                        load_btn.click(
-                            fn=load_data,
-                            inputs=[file_input, header_check, kv_check],
-                            outputs=[info_box, preview_table]
-                        )
 
                     # -----------------------------
-                    # TAB 2: Analysts
+                    # TAB 2: Data Health
                     # -----------------------------
-                    with gr.Tab("Run Analytics"):
+                    with gr.Tab("Data Health"):
+                        gr.Markdown("### 🩺 Data Quality & Coverage")
+                        health_plot = gr.Plot(label="Column Coverage")
+                        health_table = gr.Dataframe(label="Detailed Coverage Stats")
+
+                    # -----------------------------
+                    # TAB 3: Run Analytics
+                    # -----------------------------
+                    with gr.Tab("Run Analytics") as analysis_tab:
                         gr.Markdown("### 📈 Built-in and Custom Analyzers")
-                        gr.Markdown("Select an analyst script to run complex data transformations. You can also drag-and-drop a `.py` file here to load custom local plugins on the fly.")
                         
                         analyzer_choices = get_analyzer_choices()
                         
@@ -207,54 +339,59 @@ def create_ui():
                             with gr.Column(scale=2):
                                 analyzer_dropdown = gr.Dropdown(
                                     choices=analyzer_choices, 
-                                    label="Select Analyzer", 
-                                    info="Included analysts and dropped plugins"
+                                    label="Select Analyzer"
                                 )
-                                row_slider_analysis = gr.Dropdown(
-                                    choices=[15, 25, 50, 100, 200], 
-                                    value=50, 
-                                    label="Max entries to show (Height)"
-                                )
-                                col_dropdown_analysis = gr.Dropdown(
-                                    choices=["5", "10", "20", "50", "All"], 
-                                    value="All", 
-                                    label="Max columns to show (Width)"
-                                )
+                                with gr.Row():
+                                    row_slider_analysis = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows")
+                                    col_dropdown_analysis = gr.Dropdown(choices=["5", "10", "20", "50", "All"], value="All", label="Cols")
                                 run_analyzer_btn = gr.Button("▶ Run Analyzer", variant="primary")
                                 
                             with gr.Column(scale=1):
-                                plugin_upload = gr.File(label="Drop custom plugin script (.py)", file_types=[".py"])
+                                plugin_upload = gr.File(label="Drop custom plugin (.py)", file_types=[".py"])
                                 plugin_status = gr.Textbox(label="Plugin Status", lines=1, interactive=False)
                         
                         analyzer_status = gr.Textbox(label="Status", lines=1, interactive=False)
+                        
+                        # Export buttons
+                        with gr.Row():
+                            gr.Markdown("**Export Last Result:**")
+                            export_csv_btn = gr.Button("CSV", size="sm")
+                            export_json_btn = gr.Button("JSON", size="sm")
+                            export_parquet_btn = gr.Button("Parquet", size="sm")
+                            export_xlsx_btn = gr.Button("Excel", size="sm")
+                        
+                        export_download = gr.File(label="Download Exported File", visible=False)
+                        
                         analyzer_results = gr.Dataframe(
                             label="Analysis Results",
                             interactive=False,
                             wrap=True,
                             elem_id="analysis-results",
-                            max_height=575
+                            max_height=500
                         )
                         analysis_css_override = gr.HTML("")
-                        
-                        plugin_upload.upload(
-                            fn=upload_plugin,
-                            inputs=[plugin_upload],
-                            outputs=[plugin_status, analyzer_dropdown]
-                        )
-                        
-                        run_analyzer_btn.click(
-                            fn=run_analysis,
-                            inputs=[analyzer_dropdown, row_slider_analysis, col_dropdown_analysis],
-                            outputs=[analyzer_status, analyzer_results, analysis_css_override]
-                        )
+                        analysis_chart_display = gr.Plot(label="Analysis Auto-Chart")
 
                     # -----------------------------
-                    # TAB 3: SQL Editor
+                    # TAB 4: SQL Editor
                     # -----------------------------
-                    with gr.Tab("SQL Editor"):
+                    with gr.Tab("SQL Editor") as sql_tab:
                         gr.Markdown("### 💻 Custom SQL Query")
-                        gr.Markdown("Run DuckDB SQL directly. The loaded table is available as `data`.")
                         
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                sql_pattern_dropdown = gr.Dropdown(
+                                    choices=list(SQL_PATTERNS.keys()), 
+                                    label="SQL Pattern Library",
+                                    info="Quick start queries"
+                                )
+                            with gr.Column(scale=2):
+                                sql_history_dropdown = gr.Dropdown(
+                                    choices=[], 
+                                    label="Recent Queries",
+                                    info="Re-run previous SQL"
+                                )
+
                         sql_input = gr.Code(
                             language="sql",
                             lines=10,
@@ -264,61 +401,107 @@ def create_ui():
                         )
                         
                         with gr.Row():
-                            format_btn = gr.Button("✨ Prettify SQL")
                             run_sql_btn = gr.Button("▶ Run SQL", variant="primary")
                         
-                        row_slider_sql = gr.Dropdown(
-                            choices=[15, 25, 50, 100, 200], 
-                            value=50, 
-                            label="Max entries to show (Height)"
-                        )
-                        col_dropdown_sql = gr.Dropdown(
-                            choices=["5", "10", "20", "50", "All"], 
-                            value="All", 
-                            label="Max columns to show (Width)"
-                        )
-                        sql_status = gr.Textbox(label="Execution Status", lines=2, interactive=False)
+                        with gr.Row():
+                            row_slider_sql = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows")
+                            col_dropdown_sql = gr.Dropdown(choices=["5", "10", "20", "50", "All"], value="All", label="Cols")
+                        
+                        sql_status = gr.Textbox(label="Execution Status", lines=1, interactive=False)
+                        
+                        # Export buttons for SQL
+                        with gr.Row():
+                            gr.Markdown("**Export Last Result:**")
+                            sql_export_csv_btn = gr.Button("CSV", size="sm")
+                            sql_export_json_btn = gr.Button("JSON", size="sm")
+                            sql_export_parquet_btn = gr.Button("Parquet", size="sm")
+                            sql_export_xlsx_btn = gr.Button("Excel", size="sm")
+                        
+                        sql_export_download = gr.File(label="Download Exported File", visible=False)
+                        
                         sql_results = gr.Dataframe(
                             label="Query Results",
                             interactive=False,
                             wrap=True,
                             elem_id="sql-results",
-                            max_height=575
+                            max_height=500
                         )
                         sql_css_override = gr.HTML("")
-                        
-                        format_btn.click(
-                            fn=prettify_sql,
-                            inputs=[sql_input],
-                            outputs=[sql_input]
-                        )
-                        
-                        run_sql_btn.click(
-                            fn=execute_sql,
-                            inputs=[sql_input, row_slider_sql, col_dropdown_sql],
-                            outputs=[sql_status, sql_results, sql_css_override]
-                        )
+                        sql_chart_display = gr.Plot(label="SQL Auto-Chart")
 
-        # Floating Back to Top Button (Fixed position)
+        # --- Event Listeners ---
+        
+        # Load Data
+        load_btn.click(
+            fn=load_data,
+            inputs=[file_input, header_check, kv_check],
+            outputs=[info_box, preview_table, schema_sidebar, health_plot, health_table]
+        )
+        
+        # Run Analyzer
+        run_analyzer_btn.click(
+            fn=run_analysis,
+            inputs=[analyzer_dropdown, row_slider_analysis, col_dropdown_analysis],
+            outputs=[analyzer_status, analyzer_results, analysis_css_override, analysis_chart_display]
+        )
+        
+        # Run SQL
+        run_sql_btn.click(
+            fn=execute_sql,
+            inputs=[sql_input, row_slider_sql, col_dropdown_sql],
+            outputs=[sql_status, sql_results, sql_css_override, sql_history_dropdown, sql_chart_display]
+        )
+        
+        # SQL Pattern Selection
+        sql_pattern_dropdown.change(
+            fn=update_sql_from_selection,
+            inputs=[sql_pattern_dropdown],
+            outputs=[sql_input]
+        )
+        
+        # SQL History Selection
+        sql_history_dropdown.change(
+            fn=apply_historical_query,
+            inputs=[sql_history_dropdown],
+            outputs=[sql_input]
+        )
+        
+        # Plugin Upload
+        plugin_upload.upload(
+            fn=upload_plugin,
+            inputs=[plugin_upload],
+            outputs=[plugin_status, analyzer_dropdown]
+        )
+        
+        # Exporting Analysis Results
+        def make_analyzer_export(fmt):
+            path = export_results(fmt)
+            return gr.update(value=path, visible=True) if path else gr.update(visible=False)
+
+        export_csv_btn.click(lambda: make_analyzer_export("csv"), None, export_download)
+        export_json_btn.click(lambda: make_analyzer_export("json"), None, export_download)
+        export_parquet_btn.click(lambda: make_analyzer_export("parquet"), None, export_download)
+        export_xlsx_btn.click(lambda: make_analyzer_export("xlsx"), None, export_download)
+        
+        # Exporting SQL Results
+        def make_sql_export(fmt):
+            path = export_results(fmt)
+            return gr.update(value=path, visible=True) if path else gr.update(visible=False)
+
+        sql_export_csv_btn.click(lambda: make_sql_export("csv"), None, sql_export_download)
+        sql_export_json_btn.click(lambda: make_sql_export("json"), None, sql_export_download)
+        sql_export_parquet_btn.click(lambda: make_sql_export("parquet"), None, sql_export_download)
+        sql_export_xlsx_btn.click(lambda: make_sql_export("xlsx"), None, sql_export_download)
+
+        # Floating Back to Top Button
         gr.HTML("""
-            <button id='back-to-top' 
-                    onclick='window.scrollTo({top: 0, behavior: "smooth"}); 
-                             document.querySelector(".gradio-container")?.scrollTo({top: 0, behavior: "smooth"});
-                             document.body.scrollTo({top: 0, behavior: "smooth"});'
-                    style='position: fixed; bottom: 30px; right: 30px; z-index: 1000; 
-                           width: 50px; height: 50px; border-radius: 50%; 
-                           background-color: #2563eb; color: white; border: none; 
-                           box-shadow: 0 4px 12px rgba(0,0,0,0.15); cursor: pointer; 
-                           display: flex; align-items: center; justify-content: center; 
-                           font-size: 20px; transition: transform 0.2s, background-color 0.2s;'
-                    onmouseover='this.style.transform="scale(1.1)"; this.style.backgroundColor="#1d4ed8";'
-                    onmouseout='this.style.transform="scale(1.0)"; this.style.backgroundColor="#2563eb";'>
+            <button id='back-to-top' onclick='window.scrollTo({top: 0, behavior: "smooth"});'
+                    style='position: fixed; bottom: 30px; right: 30px; z-index: 1000; width: 50px; height: 50px; border-radius: 50%; background-color: #2563eb; color: white; border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.15); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px;'>
                 ⬆️
             </button>
         """)
 
-        # Footer with Build Version
-        gr.HTML("<div style='text-align: center; margin-top: 50px; padding-bottom: 30px; color: #888; font-size: 12px;'>DuckDB Processor UI - Build Version: 1.0.5</div>")
+        gr.HTML("<div style='text-align: center; margin-top: 50px; padding-bottom: 30px; color: #888; font-size: 12px;'>DuckDB Processor UI - Enhanced Build 1.1.0</div>")
 
     return app, theme, custom_css
 
