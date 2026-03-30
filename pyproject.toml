@@ -21,6 +21,10 @@ export = [
     "openpyxl>=3.0.0",  # Excel export
     "pyarrow>=10.0.0",  # Parquet export
 ]
+ui = [
+    "gradio>=4.0.0",
+    "sqlparse>=0.5.0",
+]
 
 [project.scripts]
 duckdb-processor = "duckdb_processor.cli:main"
