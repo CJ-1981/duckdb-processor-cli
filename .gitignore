@@ -215,3 +215,4 @@ dist-ssr/
 .vercel/
 .netlify/
 .firebase/
+.gradio_session.json
