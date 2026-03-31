@@ -30,6 +30,7 @@ SQL_PATTERNS = {
 }
 
 PATTERNS_FILE = "sql_patterns.json"
+LAST_SESSION_FILE = ".gradio_session.json"
 
 def load_patterns():
     """Load user patterns from file and merge with defaults."""
@@ -62,6 +63,31 @@ def save_new_pattern(name, query):
 # Initial pattern load
 load_patterns()
 
+def cleanup_session():
+    """Delete the last session file on cold start to ensure a clean slate."""
+    if os.path.exists(LAST_SESSION_FILE):
+        try:
+            os.remove(LAST_SESSION_FILE)
+            logger.info("Cold start: Deleted previous session cache.")
+        except:
+            pass
+
+# Pre-startup cleanup
+cleanup_session()
+
+def save_session(file_path, header, kv):
+    """Save the last load configuration to disk for session recovery."""
+    try:
+        data = {
+            "file_path": os.path.abspath(file_path),
+            "header": header,
+            "kv": kv
+        }
+        with open(LAST_SESSION_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.error(f"Failed to save session: {e}")
+
 # Global state for a single-user local app
 global_processor = None
 query_history = []
@@ -77,11 +103,15 @@ def get_schema_info():
     except Exception as e:
         return f"Error fetching schema: {e}"
 
-def get_data_profiling():
+def get_data_profiling(is_dark=False):
     """Fetch coverage and return a Plotly figure."""
     global global_processor
     if global_processor is None:
         return None, "No data loaded.", None
+    
+    template = "plotly_dark" if is_dark else "plotly_white"
+    bg_color = "#111827" if is_dark else "white"
+    
     try:
         df = global_processor.coverage()
         fig = px.bar(
@@ -92,9 +122,12 @@ def get_data_profiling():
             labels={"coverage_%": "Coverage Percentage", "column": "Column Name"},
             range_y=[0, 100],
             color="coverage_%",
-            color_continuous_scale="RdYlGn"
+            color_continuous_scale="RdYlGn",
+            template=template
         )
         fig.update_layout(showlegend=False)
+        if is_dark:
+            fig.update_layout(paper_bgcolor=bg_color, plot_bgcolor=bg_color)
         
         # New: Get summary statistics using DuckDB SUMMARIZE
         profile_df = global_processor.sql(f"SUMMARIZE {global_processor.table}")
@@ -128,10 +161,13 @@ def export_results(format):
         logger.error(f"Export error: {e}")
         return None
 
-def generate_auto_chart(df):
+def generate_auto_chart(df, is_dark=False):
     """Attempt to generate a relevant chart from a dataframe."""
     if df is None or df.empty:
         return None
+    
+    template = "plotly_dark" if is_dark else "plotly_white"
+    bg_color = "#111827" if is_dark else "white"
     
     try:
         cols = df.columns
@@ -142,83 +178,181 @@ def generate_auto_chart(df):
         
         # 1. Histogram (Single Numeric Column)
         if n_cols == 1 and numeric_cols:
-            return px.histogram(df, x=cols[0], title=f"Distribution of {cols[0]}", nbins=30)
+            fig = px.histogram(df, x=cols[0], title=f"Distribution of {cols[0]}", nbins=30, template=template)
             
         # 2. Heatmap (Multiple Numeric Columns - Pivot Table style)
-        if len(numeric_cols) > 2 and not other_cols:
-             return px.imshow(numeric_df, text_auto=True, title="Data Heatmap", aspect="auto")
+        elif len(numeric_cols) > 2 and not other_cols:
+             fig = px.imshow(numeric_df, text_auto=True, title="Data Heatmap", aspect="auto", template=template)
              
-        if not numeric_cols:
+        elif not numeric_cols:
             # If no numeric, try bar chart of counts for the first column
             counts = df[cols[0]].value_counts().reset_index()
             counts.columns = [cols[0], "count"]
-            return px.bar(counts, x=cols[0], y="count", title=f"Frequency of {cols[0]}")
+            fig = px.bar(counts, x=cols[0], y="count", title=f"Frequency of {cols[0]}", template=template)
         
-        x_col = other_cols[0] if other_cols else cols[0]
-        y_col = numeric_cols[0]
-        
-        # 3. Scatter Plot (Exactly Two Numeric Columns)
-        if len(numeric_cols) == 2 and not other_cols:
-            return px.scatter(df, x=numeric_cols[0], y=numeric_cols[1], title=f"{numeric_cols[1]} vs {numeric_cols[0]}")
-
-        # 4. Pie Chart (Few categories + 1 Numeric)
-        if len(other_cols) == 1 and len(numeric_cols) == 1:
-            n_unique = df[other_cols[0]].nunique()
-            if 1 < n_unique < 12:
-                return px.pie(df, names=other_cols[0], values=numeric_cols[0], title=f"{numeric_cols[0]} Distribution by {other_cols[0]}")
-
-        # 5. Line and Bar charts (Time-series or larger categories)
-        if "date" in x_col.lower() or "time" in x_col.lower():
-            return px.line(df, x=x_col, y=y_col, title=f"{y_col} over {x_col}")
         else:
-            return px.bar(df, x=x_col, y=y_col, title=f"{y_col} by {x_col}")
+            x_col = other_cols[0] if other_cols else cols[0]
+            y_col = numeric_cols[0]
+            
+            # 3. Scatter Plot (Exactly Two Numeric Columns)
+            if len(numeric_cols) == 2 and not other_cols:
+                fig = px.scatter(df, x=numeric_cols[0], y=numeric_cols[1], title=f"{numeric_cols[1]} vs {numeric_cols[0]}", template=template)
+    
+            # 4. Pie Chart (Few categories + 1 Numeric)
+            elif len(other_cols) == 1 and len(numeric_cols) == 1 and 1 < df[other_cols[0]].nunique() < 12:
+                fig = px.pie(df, names=other_cols[0], values=numeric_cols[0], title=f"{numeric_cols[0]} Distribution by {other_cols[0]}", template=template)
+    
+            # 5. Line and Bar charts (Time-series or larger categories)
+            elif "date" in x_col.lower() or "time" in x_col.lower():
+                fig = px.line(df, x=x_col, y=y_col, title=f"{y_col} over {x_col}", template=template)
+            else:
+                fig = px.bar(df, x=x_col, y=y_col, title=f"{y_col} by {x_col}", template=template)
+        
+        if is_dark and fig:
+            fig.update_layout(paper_bgcolor=bg_color, plot_bgcolor=bg_color)
+        return fig
         
     except Exception as e:
         logger.error(f"Chart error: {e}")
         return None
 
-def render_manual_chart(df, chart_type, x_axis, y_axis):
+def render_manual_chart(df, chart_type, x_axis, y_axis, color_by=None, facet_by=None, show_trend=False, is_dark=False):
     """Generate a Plotly chart based on manual user selection."""
-    if df is None or df.empty or not chart_type or not x_axis:
+    if df is None or df.empty:
         return None
     
+    # Fallback: if user hasn't selected an axis or chart type yet, 
+    # show the auto-chart instead of disappearing.
+    if not chart_type or not x_axis:
+        return generate_auto_chart(df, is_dark=is_dark)
+    
+    template = "plotly_dark" if is_dark else "plotly_white"
+    bg_color = "#111827" if is_dark else "white"
+    
     try:
-        title = f"Manual {chart_type}: {y_axis or 'Count'} by {x_axis}"
+        # Create a copy so we don't mutate the original state
+        df_plot = df.copy()
         
-        if chart_type == "Bar":
-            return px.bar(df, x=x_axis, y=y_axis, title=title)
-        elif chart_type == "Line":
-            return px.line(df, x=x_axis, y=y_axis, title=title)
-        elif chart_type == "Scatter":
-            return px.scatter(df, x=x_axis, y=y_axis, title=title)
-        elif chart_type == "Pie":
-            return px.pie(df, names=x_axis, values=y_axis, title=title)
+        # Plotly Express needs unique column names - ensure they are unique
+        cols = []
+        counts = {}
+        for c in df_plot.columns:
+            counts[c] = counts.get(c, 0) + 1
+            if counts[c] > 1:
+                cols.append(f"{c}_{counts[c]}")
+            else:
+                cols.append(c)
+        df_plot.columns = cols
+        
+        # Mapping updated column names back to selected axes
+        # (This handles the case where user selects a column that was renamed)
+        # Assuming for now that the input names match the first occurrence.
+        
+        title = f"Manual {chart_type}: {y_axis or 'Count'} by {x_axis}"
+        if color_by: title += f" (Color by {color_by})"
+        if facet_by: title += f" (Split by {facet_by})"
+        
+        # Trend line only for Scatter
+        trend = "ols" if show_trend and chart_type == "Scatter" else None
+        
+        # Set up standard kwargs
+        kwargs = {
+            "title": title,
+            "x": x_axis,
+            "y": y_axis,
+            "color": color_by if color_by and color_by != "None" else None,
+            "facet_col": facet_by if facet_by and facet_by != "None" else None,
+            "facet_col_wrap": 2 if facet_by else None,
+            "template": template
+        }
+        
+        if chart_type == "Pie":
+            fig = px.pie(df_plot, names=x_axis, values=y_axis, title=title, template=template)
         elif chart_type == "Histogram":
-            return px.histogram(df, x=x_axis, title=f"Histogram of {x_axis}")
+            kwargs.pop("y", None)
+            fig = px.histogram(df_plot, **kwargs)
+        else:
+            # px.bar, px.line, px.scatter all handled by the same kwargs (in kwargs)
+            # but we need to call the right function
+            if chart_type == "Bar": 
+                fig = px.bar(df_plot, **kwargs)
+            elif chart_type == "Line": 
+                fig = px.line(df_plot, **kwargs)
+            else: 
+                if trend == "ols":
+                    # Pre-check: OLS requires numeric data
+                    try:
+                        pd.to_numeric(df_plot[x_axis])
+                        if y_axis: pd.to_numeric(df_plot[y_axis])
+                    except:
+                        raise ValueError("Trend Line (OLS) requires numeric values on both X and Y axes. Please select numeric columns or uncheck 'Show Trend Line'.")
+                    kwargs["trendline"] = trend
+                fig = px.scatter(df_plot, **kwargs)
+        
+        if is_dark:
+            fig.update_layout(paper_bgcolor=bg_color, plot_bgcolor=bg_color)
+        return fig
         
     except Exception as e:
-        logger.error(f"Manual Chart error: {e}")
-        return None
+        error_str = str(e)
+        logger.error(f"Manual Chart error: {error_str}")
+        # Return a "Visual Error" chart so the user sees the issue on the UI
+        fig = go.Figure()
+        fig.update_layout(
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+            annotations=[{
+                "text": f"⚠️ Chart Error:<br>{error_str}",
+                "xref": "paper",
+                "yref": "paper",
+                "showarrow": False,
+                "font": {"size": 14, "color": "red"}
+            }]
+        )
+        return fig
 
-def load_data(file_obj, header, kv):
+def save_session(file_path, header, kv):
+    """Save the last load configuration to disk for session recovery."""
+    try:
+        data = {
+            "file_path": os.path.abspath(file_path),
+            "header": header,
+            "kv": kv
+        }
+        with open(LAST_SESSION_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.error(f"Failed to save session: {e}")
+
+def refresh_profiling(is_dark):
+    """Wrapper to refresh only the profiling chart when theme changes."""
+    fig, df_cov, df_sum = get_data_profiling(is_dark=is_dark)
+    return fig
+
+def load_data(file_obj, header, kv, is_dark=False):
     """Load the CSV into DuckDB via Processor API and return preview."""
     global global_processor
-    logger.info(f"Loading data: file={file_obj.name if file_obj else 'None'}, header={header}, kv={kv}")
-    if file_obj is None:
-        return "Please upload a CSV file.", None
+    # Handle the case where file_obj is a path (string) or a Gradio file object
+    file_path = file_obj if isinstance(file_obj, str) else (file_obj.name if file_obj else None)
+    
+    logger.info(f"Loading data: file={file_path}, header={header}, kv={kv}")
+    if not file_path:
+        return "⚠️ No file provided.", None, "No data.", None, None, None
     
     try:
         # Pass file path to config
-        config = ProcessorConfig(file=file_obj.name, header=header, kv=kv)
+        config = ProcessorConfig(file=file_path, header=header, kv=kv)
         global_processor = load(config)
         
+        # Save session info for auto-recovery
+        save_session(file_path, header, kv)
+        
         info = global_processor.info()
-        # Format info nicely
-        info_str = json.dumps(info, indent=2)
+        info_str = f"Rows: {info.get('rows', '?')}, Cols: {info.get('cols', '?')}"
         
         preview_df = global_processor.preview(100)
         schema_str = get_schema_info()
-        health_fig, health_df, profile_df = get_data_profiling()
+        health_fig, health_df, profile_df = get_data_profiling(is_dark=is_dark)
         
         logger.info("Data loaded successfully.")
         return (
@@ -234,15 +368,15 @@ def load_data(file_obj, header, kv):
         logger.error(f"{error_msg}\n{traceback.format_exc()}")
         return error_msg, None, "Error", None, None, None
 
-def run_analysis(analyzer_name, max_rows, max_cols):
+def run_analysis(analyzer_name, max_rows, max_cols, is_dark=False):
     """Run the selected analyzer against the loaded processor."""
     global global_processor
     logger.info(f"Running analysis: {analyzer_name}, max_rows={max_rows}, max_cols={max_cols}")
     if global_processor is None:
-        return "❌ Error: Please load data first (go to Data Preview tab).", gr.update()
+        return "❌ Error: Please load data first (go to Data Preview tab).", gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
     
     if not analyzer_name:
-        return "⚠️ Please select an analyzer from the dropdown.", gr.update()
+        return "⚠️ Please select an analyzer from the dropdown.", gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
     
     try:
         analyzer = get_analyzer(analyzer_name)
@@ -250,18 +384,18 @@ def run_analysis(analyzer_name, max_rows, max_cols):
         
         df = global_processor.last_result
         if df is None or df.empty:
-            return f"✅ Analyzer '{analyzer_name}' ran successfully, but returned no results.", gr.update(), gr.update()
+            return f"✅ Analyzer '{analyzer_name}' ran successfully, but returned no results.", gr.update(), gr.update(), None, None, gr.update(), gr.update(), gr.update(), gr.update()
             
         # Calculate dynamic height
         height_px = int(max_rows) * 35 + 80
         
         # Instead of hiding columns, we force min-width via CSS to control visual "width"
-        # If max_cols is 5, we make columns wider; if 50, we make them narrower to fit more.
         col_width = 150 if max_cols == "All" else (1500 // int(max_cols))
         style_injection = f"<style>#analysis-results td, #analysis-results th {{ min-width: {col_width}px !important; }}</style>"
         
-        chart_fig = generate_auto_chart(df)
+        chart_fig = generate_auto_chart(df, is_dark=is_dark)
         cols = df.columns.tolist()
+        choices_with_none = [None] + cols
         
         return (
             f"✅ Analyzer '{analyzer_name}' ran successfully!", 
@@ -269,23 +403,28 @@ def run_analysis(analyzer_name, max_rows, max_cols):
             style_injection, 
             chart_fig,
             df,                                      # For gr.State
-            gr.update(choices=cols, value=cols[0]),  # X-Axis choices
-            gr.update(choices=cols, value=cols[1] if len(cols) > 1 else None) # Y-Axis choices
+            gr.update(choices=cols, value=cols[0]),  # X-Axis
+            gr.update(choices=cols, value=cols[1] if len(cols) > 1 else None), # Y-Axis
+            gr.update(choices=choices_with_none, value=None), # Color By
+            gr.update(choices=choices_with_none, value=None)  # Facet By
         )
     except Exception as e:
         error_msg = f"❌ Error running analyzer: {e}"
         logger.error(error_msg)
-        return error_msg, gr.update(), gr.update(), None, None, gr.update(), gr.update()
+        return (
+            error_msg, gr.update(), gr.update(), gr.update(), gr.update(), 
+            gr.update(), gr.update(), gr.update(), gr.update()
+        )
 
-def execute_sql(query, max_rows, max_cols):
+def execute_sql(query, max_rows, max_cols, is_dark=False):
     """Run arbitrary SQL from the SQL Editor."""
     global global_processor
     logger.info(f"Executing SQL query, max_rows={max_rows}, max_cols={max_cols}")
     if global_processor is None:
-        return "❌ Error: Please load data first (go to Data Preview tab).", gr.update()
+        return "❌ Error: Please load data first (go to Data Preview tab).", gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
     
     if not query or not query.strip():
-        return "⚠️ Query is empty.", gr.update()
+        return "⚠️ Query is empty.", gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
     
     try:
         df = global_processor.sql(query)
@@ -300,8 +439,9 @@ def execute_sql(query, max_rows, max_cols):
             query_history.insert(0, query)
             if len(query_history) > 20: query_history.pop()
         
-        chart_fig = generate_auto_chart(df)
+        chart_fig = generate_auto_chart(df, is_dark=is_dark)
         cols = df.columns.tolist()
+        choices_with_none = [None] + cols
         
         return (
             f"✅ Query executed successfully! Returned {total_rows} total rows.", 
@@ -310,13 +450,18 @@ def execute_sql(query, max_rows, max_cols):
             gr.update(choices=query_history),
             chart_fig,
             df,                                      # For gr.State
-            gr.update(choices=cols, value=cols[0]),  # X-Axis choices
-            gr.update(choices=cols, value=cols[1] if len(cols) > 1 else None) # Y-Axis choices
+            gr.update(choices=cols, value=cols[0]),  # X-Axis
+            gr.update(choices=cols, value=cols[1] if len(cols) > 1 else None), # Y-Axis
+            gr.update(choices=choices_with_none, value=None), # Color By
+            gr.update(choices=choices_with_none, value=None)  # Facet By
         )
     except Exception as e:
         error_msg = f"❌ Error executing SQL: {e}"
         logger.error(error_msg)
-        return error_msg, gr.update(), gr.update(), gr.update(), None, None, gr.update(), gr.update()
+        return (
+            error_msg, gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), 
+            gr.update(), gr.update(), gr.update(), gr.update()
+        )
 
 def update_sql_from_selection(pattern_name):
     """Update SQL input from pattern library."""
@@ -373,6 +518,12 @@ def upload_plugin(file_obj):
 
 # Custom CSS for UI polish
 custom_css = """
+/* Hide Screen Studio / Recording tools */
+button[title*='Record'], button[title*='Screen'], 
+.record-button, .stop-recording, .screen-studio-ui {
+    display: none !important;
+}
+
 /* Enhance dataframe visibility */
 .gradio-dataframe table { border-collapse: collapse; }
 
@@ -462,6 +613,9 @@ def create_ui():
                     with gr.Tab("Data Profiling"):
                         gr.Markdown("### 🔍 Data Quality & Profiling")
                         with gr.Row():
+                            profile_dark_toggle = gr.Checkbox(label="Dark Mode Charts", value=False)
+                        
+                        with gr.Row():
                             with gr.Column(scale=2):
                                 profile_plot = gr.Plot(label="Column Coverage (%)")
                             with gr.Column(scale=1):
@@ -530,7 +684,18 @@ def create_ui():
                             analysis_x_axis = gr.Dropdown(choices=[], label="X-Axis")
                             analysis_y_axis = gr.Dropdown(choices=[], label="Y-Axis")
                         
+                        with gr.Row():
+                            analysis_color_by = gr.Dropdown(choices=[], label="Color By")
+                            analysis_facet_by = gr.Dropdown(choices=[], label="Facet By")
+                        
+                        with gr.Row():
+                            analysis_show_trend = gr.Checkbox(label="Show Trend Line (Scatter Only)", value=False)
+                            analysis_dark_toggle = gr.Checkbox(label="Dark Mode Charts", value=False)
+                        
                         analysis_chart_display = gr.Plot(label="Analysis Chart")
+                        
+                        # Added this to keep "Auto Chart" around if needed
+                        analysis_auto_chart_state = gr.State(None)
 
                     # -----------------------------
                     # TAB 4: SQL Editor
@@ -608,21 +773,57 @@ def create_ui():
                             sql_x_axis = gr.Dropdown(choices=[], label="X-Axis")
                             sql_y_axis = gr.Dropdown(choices=[], label="Y-Axis")
                         
+                        with gr.Row():
+                            sql_color_by = gr.Dropdown(choices=[], label="Color By")
+                            sql_facet_by = gr.Dropdown(choices=[], label="Facet By")
+                        
+                        with gr.Row():
+                            sql_show_trend = gr.Checkbox(label="Show Trend Line (Scatter Only)", value=False)
+                            sql_dark_toggle = gr.Checkbox(label="Dark Mode Charts", value=False)
+                        
                         sql_chart_display = gr.Plot(label="SQL Chart")
 
         # --- Event Listeners ---
         
         # Load Data
+        # Auto-restore session logic
+        def auto_restore_session(is_dark):
+            """Attempt to restore the last session from the local cache."""
+            if not os.path.exists(LAST_SESSION_FILE):
+                return [gr.update()]*6
+                
+            try:
+                with open(LAST_SESSION_FILE, "r") as f:
+                    session = json.load(f)
+                if session and os.path.exists(session["file_path"]):
+                    logger.info(f"Auto-restoring session: {session['file_path']}")
+                    return load_data(session["file_path"], session["header"], session["kv"], is_dark=is_dark)
+            except Exception as e:
+                logger.error(f"Session restoration failed: {e}")
+            return [gr.update()]*6
+
+        app.load(
+            fn=auto_restore_session,
+            inputs=[profile_dark_toggle],
+            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table]
+        )
+
         load_btn.click(
             fn=load_data,
-            inputs=[file_input, header_check, kv_check],
+            inputs=[file_input, header_check, kv_check, profile_dark_toggle],
             outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table]
+        )
+
+        profile_dark_toggle.change(
+            fn=refresh_profiling,
+            inputs=[profile_dark_toggle],
+            outputs=[profile_plot]
         )
         
         # Run Analyzer
         run_analyzer_btn.click(
             fn=run_analysis,
-            inputs=[analyzer_dropdown, row_slider_analysis, col_dropdown_analysis],
+            inputs=[analyzer_dropdown, row_slider_analysis, col_dropdown_analysis, analysis_dark_toggle],
             outputs=[
                 analyzer_status, 
                 analyzer_results, 
@@ -630,20 +831,33 @@ def create_ui():
                 analysis_chart_display,
                 analysis_state,
                 analysis_x_axis,
-                analysis_y_axis
+                analysis_y_axis,
+                analysis_color_by,
+                analysis_facet_by
             ]
         )
         
         # Manual Charting (Analysis)
-        analysis_man_inputs = [analysis_state, analysis_chart_type, analysis_x_axis, analysis_y_axis]
+        analysis_man_inputs = [
+            analysis_state, analysis_chart_type, analysis_x_axis, 
+            analysis_y_axis, analysis_color_by, analysis_facet_by, 
+            analysis_show_trend, analysis_dark_toggle
+        ]
         analysis_chart_type.change(render_manual_chart, inputs=analysis_man_inputs, outputs=analysis_chart_display)
         analysis_x_axis.change(render_manual_chart, inputs=analysis_man_inputs, outputs=analysis_chart_display)
         analysis_y_axis.change(render_manual_chart, inputs=analysis_man_inputs, outputs=analysis_chart_display)
+        analysis_color_by.change(render_manual_chart, inputs=analysis_man_inputs, outputs=analysis_chart_display)
+        analysis_facet_by.change(render_manual_chart, inputs=analysis_man_inputs, outputs=analysis_chart_display)
+        analysis_dark_toggle.change(render_manual_chart, inputs=analysis_man_inputs, outputs=analysis_chart_display)
+        analysis_show_trend.change(render_manual_chart, inputs=analysis_man_inputs, outputs=analysis_chart_display)
+        analysis_dark_toggle.change(render_manual_chart, inputs=analysis_man_inputs, outputs=analysis_chart_display)
+        
+        # When "Sync" is unchecked, we do nothing special. When checked, the JS will handle it.
         
         # Run SQL
         run_sql_btn.click(
             fn=execute_sql,
-            inputs=[sql_input, row_slider_sql, col_dropdown_sql],
+            inputs=[sql_input, row_slider_sql, col_dropdown_sql, sql_dark_toggle],
             outputs=[
                 sql_status, 
                 sql_results, 
@@ -652,15 +866,25 @@ def create_ui():
                 sql_chart_display,
                 sql_state,
                 sql_x_axis,
-                sql_y_axis
+                sql_y_axis,
+                sql_color_by,
+                sql_facet_by
             ]
         )
         
         # Manual Charting (SQL)
-        sql_man_inputs = [sql_state, sql_chart_type, sql_x_axis, sql_y_axis]
+        sql_man_inputs = [
+            sql_state, sql_chart_type, sql_x_axis, 
+            sql_y_axis, sql_color_by, sql_facet_by, 
+            sql_show_trend, sql_dark_toggle
+        ]
         sql_chart_type.change(render_manual_chart, inputs=sql_man_inputs, outputs=sql_chart_display)
         sql_x_axis.change(render_manual_chart, inputs=sql_man_inputs, outputs=sql_chart_display)
         sql_y_axis.change(render_manual_chart, inputs=sql_man_inputs, outputs=sql_chart_display)
+        sql_color_by.change(render_manual_chart, inputs=sql_man_inputs, outputs=sql_chart_display)
+        sql_facet_by.change(render_manual_chart, inputs=sql_man_inputs, outputs=sql_chart_display)
+        sql_show_trend.change(render_manual_chart, inputs=sql_man_inputs, outputs=sql_chart_display)
+        sql_dark_toggle.change(render_manual_chart, inputs=sql_man_inputs, outputs=sql_chart_display)
         
         # Prettify SQL
         format_btn.click(fn=prettify_sql, inputs=[sql_input], outputs=[sql_input])
@@ -721,6 +945,37 @@ def create_ui():
             </button>
         """)
 
+        # JavaScript for UI Cleanup (Screen Studio Removal) and auto-restore stability
+        gr.HTML("""
+            <script>
+                function cleanUI() {
+                    // Remove any elements that mention Screen Studio or Recording
+                    const selectors = ['div', 'h1', 'h2', 'h3', 'p', 'span', 'button', 'label'];
+                    selectors.forEach(tag => {
+                        document.querySelectorAll(tag).forEach(el => {
+                            const txt = el.innerText || "";
+                            if (txt.includes('Screen Studio') || 
+                                txt.includes('Record your screen') || 
+                                txt.includes('Start Recording') ||
+                                txt.includes('Stop Recording')) {
+                                el.style.display = 'none';
+                                // If it's a settings row, hide the parent
+                                if (el.closest('.setting-item') || el.closest('.row')) {
+                                    (el.closest('.setting-item') || el.closest('.row')).style.display = 'none';
+                                }
+                            }
+                        });
+                    });
+                }
+
+                // Run frequently to catch elements as they load (like the settings modal)
+                setInterval(cleanUI, 1000);
+                
+                // Also trigger on initial load
+                window.addEventListener('load', cleanUI);
+            </script>
+        """)
+
         gr.HTML("<div style='text-align: center; margin-top: 50px; padding-bottom: 30px; color: #888; font-size: 12px;'>DuckDB Processor UI - Enhanced Build 1.1.0</div>")
 
     return app, theme, custom_css
@@ -732,7 +987,7 @@ if __name__ == "__main__":
         server_name="127.0.0.1",
         server_port=7860,
         inbrowser=True,
-        debug=True,
+        debug=False,         # Disable debug mode to hide dev tools
         theme=app_theme,
         css=app_css,
     )
