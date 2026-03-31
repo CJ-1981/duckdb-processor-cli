@@ -77,11 +77,11 @@ def get_schema_info():
     except Exception as e:
         return f"Error fetching schema: {e}"
 
-def get_data_health():
+def get_data_profiling():
     """Fetch coverage and return a Plotly figure."""
     global global_processor
     if global_processor is None:
-        return None, "No data loaded."
+        return None, "No data loaded.", None
     try:
         df = global_processor.coverage()
         fig = px.bar(
@@ -95,9 +95,22 @@ def get_data_health():
             color_continuous_scale="RdYlGn"
         )
         fig.update_layout(showlegend=False)
-        return fig, df
+        
+        # New: Get summary statistics using DuckDB SUMMARIZE
+        profile_df = global_processor.sql(f"SUMMARIZE {global_processor.table}")
+        
+        # Explicitly round typical numeric-stat columns for readability
+        for col in ['min', 'max', 'avg', 'std', 'q25', 'q50', 'q75', 'null_percentage']:
+            if col in profile_df.columns:
+                try:
+                    # Convert to numeric (coercing non-numeric to NaN) then round
+                    profile_df[col] = pd.to_numeric(profile_df[col], errors='coerce').round(2)
+                except:
+                    pass
+        
+        return fig, df, profile_df
     except Exception as e:
-        return None, f"Error calculating health: {e}"
+        return None, f"Error calculating metrics: {e}", None
 
 def export_results(format):
     """Export the last result to a file and return the path."""
@@ -205,7 +218,7 @@ def load_data(file_obj, header, kv):
         
         preview_df = global_processor.preview(100)
         schema_str = get_schema_info()
-        health_fig, health_df = get_data_health()
+        health_fig, health_df, profile_df = get_data_profiling()
         
         logger.info("Data loaded successfully.")
         return (
@@ -213,12 +226,13 @@ def load_data(file_obj, header, kv):
             preview_df, 
             schema_str, 
             health_fig,
-            health_df
+            health_df,
+            profile_df
         )
     except Exception as e:
         error_msg = f"❌ Error loading data: {e}"
         logger.error(f"{error_msg}\n{traceback.format_exc()}")
-        return error_msg, None, "Error", None, None
+        return error_msg, None, "Error", None, None, None
 
 def run_analysis(analyzer_name, max_rows, max_cols):
     """Run the selected analyzer against the loaded processor."""
@@ -406,7 +420,7 @@ def create_ui():
         button_primary_background_fill_hover="*primary_600",
     )
     
-    with gr.Blocks(title="DuckDB Processor UI", css=custom_css) as app:
+    with gr.Blocks(title="DuckDB Processor UI") as app:
         # States to persistent data for manual charting
         analysis_state = gr.State(None)
         sql_state = gr.State(None)
@@ -443,12 +457,23 @@ def create_ui():
                         )
 
                     # -----------------------------
-                    # TAB 2: Data Health
+                    # TAB 2: Data Profiling
                     # -----------------------------
-                    with gr.Tab("Data Health"):
-                        gr.Markdown("### 🩺 Data Quality & Coverage")
-                        health_plot = gr.Plot(label="Column Coverage")
-                        health_table = gr.Dataframe(label="Detailed Coverage Stats")
+                    with gr.Tab("Data Profiling"):
+                        gr.Markdown("### 🔍 Data Quality & Profiling")
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                profile_plot = gr.Plot(label="Column Coverage (%)")
+                            with gr.Column(scale=1):
+                                profile_coverage_table = gr.Dataframe(label="Coverage Stats")
+                        
+                        gr.Markdown("#### 📈 Column Statistics (SUMMARIZE)")
+                        profile_summary_table = gr.Dataframe(
+                            label="Summary Statistics", 
+                            interactive=False,
+                            wrap=True,
+                            max_height=400
+                        )
 
                     # -----------------------------
                     # TAB 3: Run Analytics
@@ -591,7 +616,7 @@ def create_ui():
         load_btn.click(
             fn=load_data,
             inputs=[file_input, header_check, kv_check],
-            outputs=[info_box, preview_table, schema_sidebar, health_plot, health_table]
+            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table]
         )
         
         # Run Analyzer
