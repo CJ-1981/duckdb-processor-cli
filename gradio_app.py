@@ -145,17 +145,32 @@ def get_data_profiling(is_dark=False):
     except Exception as e:
         return None, f"Error calculating metrics: {e}", None
 
-def export_results(format):
-    """Export the last result to a file and return the path."""
+def export_results(format, df=None):
+    """Export a dataframe to a specific format and return the path."""
     global global_processor
-    if global_processor is None or global_processor.last_result is None:
+    # Use the provided DF or fallback to processor's last result
+    data = df if df is not None else (global_processor.last_result if global_processor else None)
+    
+    if data is None or data.empty:
+        logger.warning("Export attempted with no data.")
         return None
     
     try:
         filename = f"duck_export_{format}.{format}"
         path = os.path.abspath(filename)
-        # Handle excel case as special if it doesn't support the generic export
-        global_processor.export(path, format=format)
+        
+        if format == "csv":
+            data.to_csv(path, index=False)
+        elif format == "json":
+            data.to_json(path, orient="records", indent=2, date_format='iso')
+        elif format == "parquet":
+            data.to_parquet(path, index=False)
+        elif format == "xlsx":
+            data.to_excel(path, index=False, engine='openpyxl')
+        else:
+            return None
+            
+        logger.info(f"Export successful: {path}")
         return path
     except Exception as e:
         logger.error(f"Export error: {e}")
@@ -918,24 +933,24 @@ def create_ui():
         )
         
         # Exporting Analysis Results
-        def make_analyzer_export(fmt):
-            path = export_results(fmt)
-            return gr.update(value=path, visible=True) if path else gr.update(visible=False)
+        def make_analyzer_export(fmt, df):
+            """Wrapper for analyzer exports."""
+            return export_results(fmt, df=df)
 
-        export_csv_btn.click(lambda: make_analyzer_export("csv"), None, export_download)
-        export_json_btn.click(lambda: make_analyzer_export("json"), None, export_download)
-        export_parquet_btn.click(lambda: make_analyzer_export("parquet"), None, export_download)
-        export_xlsx_btn.click(lambda: make_analyzer_export("xlsx"), None, export_download)
+        export_csv_btn.click(lambda df: make_analyzer_export("csv", df), inputs=[analysis_state], outputs=export_download, concurrency_limit=1)
+        export_json_btn.click(lambda df: make_analyzer_export("json", df), inputs=[analysis_state], outputs=export_download, concurrency_limit=1)
+        export_parquet_btn.click(lambda df: make_analyzer_export("parquet", df), inputs=[analysis_state], outputs=export_download, concurrency_limit=1)
+        export_xlsx_btn.click(lambda df: make_analyzer_export("xlsx", df), inputs=[analysis_state], outputs=export_download, concurrency_limit=1)
         
         # Exporting SQL Results
-        def make_sql_export(fmt):
-            path = export_results(fmt)
-            return gr.update(value=path, visible=True) if path else gr.update(visible=False)
+        def make_sql_export(fmt, df):
+            """Wrapper for SQL exports."""
+            return export_results(fmt, df=df)
 
-        sql_export_csv_btn.click(lambda: make_sql_export("csv"), None, sql_export_download)
-        sql_export_json_btn.click(lambda: make_sql_export("json"), None, sql_export_download)
-        sql_export_parquet_btn.click(lambda: make_sql_export("parquet"), None, sql_export_download)
-        sql_export_xlsx_btn.click(lambda: make_sql_export("xlsx"), None, sql_export_download)
+        sql_export_csv_btn.click(lambda df: make_sql_export("csv", df), inputs=[sql_state], outputs=sql_export_download, concurrency_limit=1)
+        sql_export_json_btn.click(lambda df: make_sql_export("json", df), inputs=[sql_state], outputs=sql_export_download, concurrency_limit=1)
+        sql_export_parquet_btn.click(lambda df: make_sql_export("parquet", df), inputs=[sql_state], outputs=sql_export_download, concurrency_limit=1)
+        sql_export_xlsx_btn.click(lambda df: make_sql_export("xlsx", df), inputs=[sql_state], outputs=sql_export_download, concurrency_limit=1)
 
         # Floating Back to Top Button
         gr.HTML("""
