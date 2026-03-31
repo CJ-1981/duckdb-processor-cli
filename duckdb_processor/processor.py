@@ -72,6 +72,8 @@ class Processor:
         }
         self.formatter = formatter  # Optional formatter for output (REQ-010, REQ-011)
         self.last_result: pd.DataFrame | None = None  # Track last query result for export
+        self.last_query: str | None = None           # Track last SQL string
+        self.last_action: str | None = None          # Track what created the last result
 
     # ── Metadata ─────────────────────────────────────────────
 
@@ -136,16 +138,18 @@ class Processor:
             result = self.con.execute(query, parameters).df()
         else:
             result = self.con.execute(query).df()
-        self.last_result = result  # Store for export
+        self.last_result = result
+        self.last_query = query
+        self.last_action = "SQL Query"
         return result
 
     def preview(self, n: int = 10) -> pd.DataFrame:
         """Return the first *n* rows from the table."""
-        return self.sql(f"SELECT * FROM {self.table} LIMIT {n}")
+        return self.con.execute(f"SELECT * FROM {self.table} LIMIT {n}").df()
 
     def schema(self) -> pd.DataFrame:
         """Return column names and their DuckDB types."""
-        return self.sql(f"DESCRIBE {self.table}")
+        return self.con.execute(f"DESCRIBE {self.table}").df()
 
     def coverage(self) -> pd.DataFrame:
         """Report the non-null fill rate for every business column.

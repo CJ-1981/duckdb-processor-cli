@@ -13,6 +13,9 @@ import tempfile
 import sys
 import logging
 import traceback
+import datetime
+from fpdf import FPDF
+from fpdf.enums import XPos, YPos
 
 # Set up logging to see debug info in the terminal
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -36,7 +39,51 @@ SQL_PATTERNS = {
 }
 
 PATTERNS_FILE = "sql_patterns.json"
+TEMPLATES_FILE = "report_templates.json"
 LAST_SESSION_FILE = ".gradio_session.json"
+
+REPORT_TEMPLATES = {
+    "Basic Summary": [
+        {"type": "Data Summary", "heading": "Overview", "body": ""},
+        {"type": "Schema Info", "heading": "Data Structure", "body": ""},
+        {"type": "Analyzer Results Table", "heading": "Analysis Details", "body": ""}
+    ],
+    "SQL Report": [
+        {"type": "Text/Note", "heading": "Executive Summary", "body": "Enter your summary here..."},
+        {"type": "SQL Results Table", "heading": "Query Results", "body": ""},
+        {"type": "Data Summary", "heading": "Data Stats", "body": ""}
+    ]
+}
+
+def load_report_templates():
+    """Load user report templates from file and merge with defaults."""
+    global REPORT_TEMPLATES
+    if os.path.exists(TEMPLATES_FILE):
+        try:
+            with open(TEMPLATES_FILE, "r") as f:
+                user_templates = json.load(f)
+                REPORT_TEMPLATES.update(user_templates)
+        except Exception as e:
+            logger.error(f"Error loading templates: {e}")
+    return list(REPORT_TEMPLATES.keys())
+
+def save_new_template(name, sections):
+    """Save a new report template to file."""
+    global REPORT_TEMPLATES
+    if not name or not sections:
+        return "⚠️ Name and Sections cannot be empty.", gr.update()
+    
+    REPORT_TEMPLATES[name] = sections
+    try:
+        with open(TEMPLATES_FILE, "w") as f:
+            json.dump(REPORT_TEMPLATES, f, indent=2)
+        choices = list(REPORT_TEMPLATES.keys())
+        return f"✅ Template '{name}' saved successfully!", gr.update(choices=choices)
+    except Exception as e:
+        return f"❌ Error saving template: {e}", gr.update()
+
+# Initial template load
+load_report_templates()
 
 def load_patterns():
     """Load user patterns from file and merge with defaults."""
@@ -136,7 +183,7 @@ def get_data_profiling(is_dark=False):
             fig.update_layout(paper_bgcolor=bg_color, plot_bgcolor=bg_color)
         
         # New: Get summary statistics using DuckDB SUMMARIZE
-        profile_df = global_processor.sql(f"SUMMARIZE {global_processor.table}")
+        profile_df = global_processor.con.execute(f"SUMMARIZE {global_processor.table}").df()
         
         # Explicitly round typical numeric-stat columns for readability
         for col in ['min', 'max', 'avg', 'std', 'q25', 'q50', 'q75', 'null_percentage']:
@@ -537,7 +584,237 @@ def upload_plugin(file_obj):
     new_choices = get_analyzer_choices()
     return f"✅ Plugin '{filename}' installed successfully!", gr.update(choices=new_choices)
 
-# --- Plugin Editor Helper Functions ---
+# --- Report Builder Helper Functions ---
+
+def get_report_timestamp():
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def add_report_section(sections, s_type, s_heading, s_body):
+    """Add a new section to the report list."""
+    if not sections: sections = []
+    new_section = {"type": s_type, "heading": s_heading, "body": s_body}
+    sections.append(new_section)
+    return sections, f"✅ Added section: {s_heading}"
+
+def remove_report_section(sections, index):
+    """Remove a section by index."""
+    if not sections or index < 0 or index >= len(sections):
+        return sections, "⚠️ Invalid section index."
+    removed = sections.pop(index)
+    return sections, f"🗑️ Removed section: {removed['heading']}"
+
+def clear_report_sections():
+    return [], "✨ All sections cleared."
+
+def render_sections_view(sections):
+    """Return a Markdown representation of the current report structure."""
+    if not sections:
+        return "_No sections added yet._"
+    
+    md = "### 📋 Current Report Structure\n\n"
+    for i, s in enumerate(sections):
+        md += f"**{i+1}. [{s['type']}] {s['heading']}**\n"
+        if s['body']:
+            md += f"   > {s['body'][:50]}...\n" if len(s['body']) > 50 else f"   > {s['body']}\n"
+    return md
+
+def generate_report_markdown(title, author, sections, include_summary=True, include_schema=True):
+    """Generate a Markdown string from the report configuration."""
+    global global_processor
+    
+    md = f"# {title or 'DuckDB Analysis Report'}\n\n"
+    md += f"**Author:** {author or 'Anonymous'}\n"
+    md += f"**Date:** {get_report_timestamp()}\n\n"
+    md += "---\n\n"
+    
+    if not sections:
+        md += "_This report contains no custom sections._\n\n"
+    
+    for s in sections:
+        md += f"## {s['heading']}\n\n"
+        
+        if s['type'] == "Text/Note":
+            md += f"{s['body']}\n\n"
+        
+        elif s['type'] in ["Analyzer Results Table", "SQL Results Table"]:
+            if global_processor and global_processor.last_result is not None:
+                if global_processor.last_action:
+                    md += f"*Source: {global_processor.last_action}*\n"
+                if s['type'] == "SQL Results Table" and global_processor.last_query:
+                    md += f"```sql\n{global_processor.last_query}\n```\n"
+                    
+                md += global_processor.last_result.head(20).to_markdown(index=False) + "\n\n"
+                if len(global_processor.last_result) > 20:
+                    md += f"_(Showing top 20 of {len(global_processor.last_result)} rows)_\n\n"
+            else:
+                md += "_No results available to display._\n\n"
+                
+        elif s['type'] == "Data Summary":
+            if global_processor:
+                info = global_processor.info()
+                md += f"- **Total Rows:** {info.get('rows', '?')}\n"
+                md += f"- **Total Columns:** {len(info.get('columns', []))}\n"
+                md += f"- **Source File:** {os.path.basename(info.get('source', 'unknown'))}\n\n"
+            else:
+                md += "_No data profile available._\n\n"
+        
+        elif s['type'] == "Schema Info":
+            if global_processor:
+                 md += "```sql\n" + get_schema_info() + "\n```\n\n"
+            else:
+                md += "_No schema info available._\n\n"
+    
+    return md
+
+class PDF(FPDF):
+    def __init__(self, font_name="helvetica", **kwargs):
+        super().__init__(**kwargs)
+        self.report_font = font_name
+
+    def header(self):
+        self.set_font(self.report_font, 'B' if self.report_font == 'helvetica' else "", 12)
+        self.cell(0, 10, 'DuckDB Analysis Report', align='C', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(5)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font(self.report_font, 'I' if self.report_font == 'helvetica' else "", 8)
+        self.cell(0, 10, f'Page {self.page_no()}', align='C', new_x=XPos.RIGHT, new_y=YPos.TOP)
+
+def generate_report_pdf(title, author, sections):
+    """Generate a PDF and return the file path."""
+    global global_processor
+    
+    # Unicode support for Mac: Try to find a font that supports Korean/Special characters
+    # We do a preliminary check to initialize the PDF class with the right font for header/footer
+    unicode_font_path = "/Library/Fonts/Arial Unicode.ttf"
+    font_name = "helvetica"
+    has_unicode = False
+    
+    if os.path.exists(unicode_font_path):
+        font_name = "ArialUnicode"
+        has_unicode = True
+        
+    pdf = PDF(font_name=font_name)
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
+    if has_unicode:
+        try:
+            pdf.add_font("ArialUnicode", "", unicode_font_path)
+        except Exception as e:
+            logger.warning(f"Failed to load Unicode font: {e}. Falling back to helvetica.")
+            pdf.report_font = "helvetica"
+            has_unicode = False
+            font_name = "helvetica"
+    
+    pdf.add_page()
+    
+    # Title Page Info
+    pdf.set_font(font_name, 'B' if not has_unicode else "", 16)
+    pdf.cell(0, 10, title or "DuckDB Analysis Report", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
+    pdf.set_font(font_name, '', 10)
+    pdf.cell(0, 8, f"Author: {author or 'Anonymous'}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
+    pdf.cell(0, 8, f"Date: {get_report_timestamp()}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
+    pdf.ln(10)
+    
+    for s in sections:
+        pdf.set_font(font_name, 'B' if not has_unicode else "", 14)
+        pdf.set_text_color(79, 70, 229) # Indigo
+        pdf.cell(0, 10, s['heading'], new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
+        pdf.set_text_color(0, 0, 0) # Black
+        pdf.ln(2)
+        
+        pdf.set_font(font_name, '', 10)
+        
+        if s['type'] == "Text/Note":
+            pdf.multi_cell(0, 8, s['body'])
+            pdf.ln(5)
+            
+        elif s['type'] in ["Analyzer Results Table", "SQL Results Table"]:
+            df = global_processor.last_result if global_processor else None
+            if df is not None and not df.empty:
+                if global_processor.last_action:
+                    pdf.set_font(font_name, 'I' if not has_unicode else "", 8)
+                    pdf.cell(0, 6, f"Data Source: {global_processor.last_action}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                
+                # Expand to 12 columns for more data visibility
+                pdf_df = df.head(15).iloc[:, :12]
+                
+                # Table Header
+                pdf.set_font(font_name, 'B' if not has_unicode else "", 8)
+                col_width = pdf.epw / len(pdf_df.columns)
+                for col in pdf_df.columns:
+                    pdf.cell(col_width, 7, str(col)[:12], border=1)
+                pdf.ln()
+                
+                # Table Data
+                pdf.set_font(font_name, '', 7)
+                for index, row in pdf_df.iterrows():
+                    for val in row:
+                        pdf.cell(col_width, 7, str(val)[:15], border=1)
+                    pdf.ln()
+                
+                if len(df) > 15:
+                    pdf.set_font(font_name, 'I' if not has_unicode else "", 7)
+                    pdf.cell(0, 5, f"(Showing first 15 rows of {len(df)})", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
+                pdf.ln(5)
+            else:
+                pdf.cell(0, 8, "No data results available to display.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.ln(5)
+                
+        elif s['type'] == "Data Summary":
+             if global_processor:
+                info = global_processor.info()
+                pdf.cell(0, 8, f"- Total Rows: {info.get('rows', '?')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.cell(0, 8, f"- Total Columns: {len(info.get('columns', []))}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.cell(0, 8, f"- Source File: {os.path.basename(info.get('source', 'unknown'))}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+             else:
+                pdf.cell(0, 8, "No data summary available.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+             pdf.ln(5)
+             
+        elif s['type'] == "Schema Info":
+            if global_processor:
+                schema_text = get_schema_info()
+                pdf.set_font("Courier", '', 8)
+                pdf.multi_cell(0, 6, schema_text)
+                pdf.set_font(font_name, '', 10)
+            else:
+                pdf.cell(0, 8, "No schema info available.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.ln(5)
+
+    filename = f"duck_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    path = os.path.abspath(filename)
+    pdf.output(path)
+    return path
+
+def export_report_file(fmt, title, author, sections):
+    """Dispatcher for exporting the report."""
+    if not sections:
+        return None
+    
+    try:
+        if fmt == "md":
+            content = generate_report_markdown(title, author, sections)
+            filename = f"duck_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+            path = os.path.abspath(filename)
+            with open(path, "w") as f:
+                f.write(content)
+            return path
+        elif fmt == "pdf":
+            return generate_report_pdf(title, author, sections)
+    except Exception as e:
+        logger.error(f"Report export error: {e}")
+        return None
+    return None
+
+def apply_report_template(template_name):
+    """Load sections from a chosen template."""
+    if template_name in REPORT_TEMPLATES:
+        # Deep copy to avoid mutating the original template
+        import copy
+        new_sections = copy.deepcopy(REPORT_TEMPLATES[template_name])
+        return new_sections, f"✅ Applied template: {template_name}", render_sections_view(new_sections), generate_report_markdown("Preview", "System", new_sections)
+    return gr.update(), "⚠️ Template not found.", gr.update(), gr.update()
 
 def get_plugin_list():
     """List all available plugins, distinguishing between built-in and custom."""
@@ -824,6 +1101,10 @@ button[title*='Record'], button[title*='Screen'],
 
 /* Logs View */
 .logs-view { font-family: 'Fira Code', monospace !important; font-size: 13px !important; line-height: 1.4 !important; }
+
+/* Report Section styling */
+.report-section-list { font-family: sans-serif; background: rgba(0,0,0,0.02); border-radius: 8px; padding: 10px; }
+.dark .report-section-list { background: rgba(255,255,255,0.02); }
 """
 
 def create_ui():
@@ -839,6 +1120,7 @@ def create_ui():
         # States to persistent data for manual charting
         analysis_state = gr.State(None)
         sql_state = gr.State(None)
+        report_sections_state = gr.State([])
         
         gr.Markdown("# 🦆 DuckDB CSV Processor")
         gr.Markdown("An interactive dashboard to explore, transform, and analyze your CSV data quickly.")
@@ -1092,6 +1374,79 @@ def create_ui():
                         
                         sql_chart_display = gr.Plot(label="SQL Chart")
 
+                    # -----------------------------
+                    # TAB 5: Report Builder
+                    # -----------------------------
+                    with gr.Tab("📝 Report Builder") as report_tab:
+                        gr.Markdown("### 📄 Custom Report Composition")
+                        gr.Markdown("Compose a professional document using your analysis results and custom notes.")
+                        
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                with gr.Group():
+                                    gr.Markdown("#### 1. Report Metadata")
+                                    report_title = gr.Textbox(label="Report Title", value="DuckDB Analysis Report")
+                                    report_author = gr.Textbox(label="Author Name", placeholder="Your Name")
+                                    
+                                with gr.Group():
+                                    gr.Markdown("#### 2. Templates")
+                                    template_dropdown = gr.Dropdown(
+                                        choices=list(REPORT_TEMPLATES.keys()),
+                                        label="Select Template",
+                                        info="Load a predefined report layout"
+                                    )
+                                    with gr.Row():
+                                        apply_template_btn = gr.Button("📋 Apply Template", variant="secondary")
+                                        save_template_name = gr.Textbox(label="Save as Template", placeholder="Template Name")
+                                        save_template_btn = gr.Button("💾 Save", scale=0)
+                            
+                            with gr.Column(scale=3):
+                                with gr.Group():
+                                    gr.Markdown("#### 3. Add Content Section")
+                                    with gr.Row():
+                                        section_type = gr.Dropdown(
+                                            choices=["Text/Note", "Analyzer Results Table", "SQL Results Table", "Data Summary", "Schema Info"],
+                                            value="Text/Note",
+                                            label="Section Type"
+                                        )
+                                        section_heading = gr.Textbox(label="Section Heading", placeholder="e.g. Findings Overview")
+                                    
+                                    section_body = gr.Textbox(
+                                        label="Content Body (for Text/Note sections)", 
+                                        lines=3, 
+                                        placeholder="Enter your observations or notes here..."
+                                    )
+                                    
+                                    with gr.Row():
+                                        add_section_btn = gr.Button("➕ Add Section", variant="primary", elem_classes=["btn-run"])
+                                        remove_idx = gr.Number(label="Section # to Remove", precision=0, minimum=1, step=1, value=1, scale=0)
+                                        remove_section_btn = gr.Button("🗑️ Remove", elem_classes=["btn-delete"], scale=0)
+                                        clear_sections_btn = gr.Button("🧹 Clear All", variant="stop", scale=0)
+                                    
+                                    report_status = gr.Textbox(label="Status", lines=1, interactive=False)
+                        
+                        gr.Markdown("---")
+                        
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                # Visual list of sections
+                                sections_markdown_view = gr.Markdown("_No sections added yet._", elem_classes=["report-section-list"])
+                                
+                                with gr.Row():
+                                    export_report_md_btn = gr.Button("📄 Export Markdown", elem_classes=["btn-export"])
+                                    export_report_pdf_btn = gr.Button("📕 Export PDF", elem_classes=["btn-export"])
+                                
+                                report_file_download = gr.File(label="Download Report")
+                                
+                            with gr.Column(scale=3):
+                                gr.Markdown("#### 🔍 Live Preview")
+                                report_preview = gr.Markdown(
+                                    "Your report preview will appear here...",
+                                    label="Report Preview",
+                                    show_label=True,
+                                    container=True
+                                )
+
         # --- Event Listeners ---
         
         # Load Data
@@ -1281,6 +1636,73 @@ def create_ui():
         sql_export_json_btn.click(lambda df: make_sql_export("json", df), inputs=[sql_state], outputs=sql_export_download, concurrency_limit=1)
         sql_export_parquet_btn.click(lambda df: make_sql_export("parquet", df), inputs=[sql_state], outputs=sql_export_download, concurrency_limit=1)
         sql_export_xlsx_btn.click(lambda df: make_sql_export("xlsx", df), inputs=[sql_state], outputs=sql_export_download, concurrency_limit=1)
+
+        # Report Builder Events
+        def add_and_update(sections, s_type, s_heading, s_body, title, author):
+            new_sections, status = add_report_section(sections, s_type, s_heading, s_body)
+            return new_sections, status, render_sections_view(new_sections), generate_report_markdown(title, author, new_sections)
+
+        def remove_and_update(sections, idx, title, author):
+            new_sections, status = remove_report_section(sections, int(idx)-1)
+            return new_sections, status, render_sections_view(new_sections), generate_report_markdown(title, author, new_sections)
+
+        def clear_and_update(title, author):
+            new_sections, status = clear_report_sections()
+            return new_sections, status, render_sections_view(new_sections), generate_report_markdown(title, author, new_sections)
+
+        add_section_btn.click(
+            fn=add_and_update,
+            inputs=[report_sections_state, section_type, section_heading, section_body, report_title, report_author],
+            outputs=[report_sections_state, report_status, sections_markdown_view, report_preview]
+        )
+
+        remove_section_btn.click(
+            fn=remove_and_update,
+            inputs=[report_sections_state, remove_idx, report_title, report_author],
+            outputs=[report_sections_state, report_status, sections_markdown_view, report_preview]
+        )
+
+        clear_sections_btn.click(
+            fn=clear_and_update,
+            inputs=[report_title, report_author],
+            outputs=[report_sections_state, report_status, sections_markdown_view, report_preview]
+        )
+
+        apply_template_btn.click(
+            fn=apply_report_template,
+            inputs=[template_dropdown],
+            outputs=[report_sections_state, report_status, sections_markdown_view, report_preview]
+        )
+
+        save_template_btn.click(
+            fn=save_new_template,
+            inputs=[save_template_name, report_sections_state],
+            outputs=[report_status, template_dropdown]
+        )
+
+        export_report_md_btn.click(
+            fn=lambda t, a, s: export_report_file("md", t, a, s),
+            inputs=[report_title, report_author, report_sections_state],
+            outputs=[report_file_download]
+        )
+
+        export_report_pdf_btn.click(
+            fn=lambda t, a, s: export_report_file("pdf", t, a, s),
+            inputs=[report_title, report_author, report_sections_state],
+            outputs=[report_file_download]
+        )
+
+        # Refresh preview when metadata changes
+        report_title.change(
+            fn=generate_report_markdown,
+            inputs=[report_title, report_author, report_sections_state],
+            outputs=[report_preview]
+        )
+        report_author.change(
+            fn=generate_report_markdown,
+            inputs=[report_title, report_author, report_sections_state],
+            outputs=[report_preview]
+        )
 
         # Floating Back to Top Button
         gr.HTML("""

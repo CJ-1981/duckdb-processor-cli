@@ -216,3 +216,5 @@ dist-ssr/
 .netlify/
 .firebase/
 .gradio_session.json
+duck_report_*.md
+duck_report_*.pdf
