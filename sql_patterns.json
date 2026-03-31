@@ -1,0 +1,11 @@
+{
+  "Select Top 10": "SELECT * FROM data LIMIT 10;",
+  "Count by Category": "SELECT category, COUNT(*) as count FROM data GROUP BY category ORDER BY count DESC;",
+  "Sum by Category": "SELECT category, SUM(TRY_CAST(amount AS DOUBLE)) as total FROM data GROUP BY category ORDER BY total DESC;",
+  "Missing Values Check": "SELECT * FROM (SELECT 'all_columns' as col, COUNT(*) as total FROM data) CROSS JOIN (SELECT count(*) as missing FROM data WHERE column_name IS NULL); -- Edit column_name",
+  "Date Trend (Daily)": "SELECT CAST(date AS DATE) as d, COUNT(*) as count FROM data GROUP BY d ORDER BY d;",
+  "Value Distribution": "SELECT amount, COUNT(*) as count FROM data GROUP BY amount ORDER BY count DESC LIMIT 20;",
+  "top_\ud5cc\uae08": "SELECT \uad50\uc778\uc131\uba85, \n       SUM(\ud5cc\uae08\ucd1d\uc561) AS \ucd1d_\ud5cc\uae08\uc561\nFROM data\nGROUP BY \uad50\uc778\uc131\uba85\nORDER BY \ucd1d_\ud5cc\uae08\uc561 DESC\nLIMIT 10;\n",
+  "top100_\ud5cc\uae08": "SELECT \uad50\uc778\uc131\uba85, \n       SUM(\ud5cc\uae08\ucd1d\uc561) AS \ucd1d_\ud5cc\uae08\uc561\nFROM data\nGROUP BY \uad50\uc778\uc131\uba85\nORDER BY \ucd1d_\ud5cc\uae08\uc561 DESC\nLIMIT 100;",
+  "top10_\ud5cc\uae08_\uae30\uba85only": "SELECT \uad50\uc778\uc131\uba85, \n       SUM(\ud5cc\uae08\ucd1d\uc561) AS \ucd1d_\ud5cc\uae08\uc561\nFROM data\nWHERE \uad50\uc778\uc131\uba85 NOT LIKE '\ubb34\uba85' -- Exclude anyone with \"\ubb34\uba85\" in their name\nGROUP BY \uad50\uc778\uc131\uba85\nORDER BY \ucd1d_\ud5cc\uae08\uc561 DESC\nLIMIT 10;\n"
+}

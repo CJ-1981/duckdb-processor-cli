@@ -29,6 +29,39 @@ SQL_PATTERNS = {
     "Value Distribution": "SELECT amount, COUNT(*) as count FROM data GROUP BY amount ORDER BY count DESC LIMIT 20;"
 }
 
+PATTERNS_FILE = "sql_patterns.json"
+
+def load_patterns():
+    """Load user patterns from file and merge with defaults."""
+    global SQL_PATTERNS
+    if os.path.exists(PATTERNS_FILE):
+        try:
+            with open(PATTERNS_FILE, "r") as f:
+                user_patterns = json.load(f)
+                SQL_PATTERNS.update(user_patterns)
+        except Exception as e:
+            logger.error(f"Error loading patterns: {e}")
+    return list(SQL_PATTERNS.keys())
+
+def save_new_pattern(name, query):
+    """Save a new SQL pattern to file and update dropdown."""
+    global SQL_PATTERNS
+    if not name or not query or not query.strip():
+        return "⚠️ Name and Query cannot be empty.", gr.update()
+    
+    SQL_PATTERNS[name] = query
+    try:
+        # Save only what's changed/added
+        with open(PATTERNS_FILE, "w") as f:
+            json.dump(SQL_PATTERNS, f, indent=2)
+        choices = list(SQL_PATTERNS.keys())
+        return f"✅ Pattern '{name}' saved successfully!", gr.update(choices=choices)
+    except Exception as e:
+        return f"❌ Error saving pattern: {e}", gr.update()
+
+# Initial pattern load
+load_patterns()
+
 # Global state for a single-user local app
 global_processor = None
 query_history = []
@@ -355,6 +388,13 @@ custom_css = """
 /* Dark Mode Override */
 .dark .btn-format { color: #fbbf24 !important; border-color: #92400e !important; background: #451a03 !important; }
 .dark .btn-format:hover { background: #78350f !important; color: #fef3c7 !important; border-color: #fbbf24 !important; }
+
+/* Save Pattern Button - Sky Blue */
+.btn-save { color: #0284c7 !important; border: 1px solid #bae6fd !important; background: #f0f9ff !important; transition: all 0.2s !important; }
+.btn-save:hover { background: #e0f2fe !important; border-color: #7dd3fc !important; color: #0369a1 !important; }
+/* Dark Mode Override */
+.dark .btn-save { color: #38bdf8 !important; border-color: #0369a1 !important; background: #082f49 !important; }
+.dark .btn-save:hover { background: #0c4a6e !important; color: #7dd3fc !important; border-color: #38bdf8 !important; }
 """
 
 def create_ui():
@@ -500,6 +540,14 @@ def create_ui():
                             format_btn = gr.Button("✨ Prettify SQL", elem_classes=["btn-format"])
                         
                         with gr.Row():
+                            with gr.Column(scale=2):
+                                save_pattern_name = gr.Textbox(label="New Pattern Name", placeholder="e.g. My Custom Analysis", interactive=True)
+                            with gr.Column(scale=1):
+                                save_pattern_btn = gr.Button("💾 Save as Pattern", elem_classes=["btn-save"])
+                        
+                        save_status = gr.Textbox(label="Save Status", lines=1, interactive=False)
+                        
+                        with gr.Row():
                             row_slider_sql = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows")
                             col_dropdown_sql = gr.Dropdown(choices=["5", "10", "20", "50", "All"], value="All", label="Cols")
                         
@@ -604,6 +652,13 @@ def create_ui():
             fn=apply_historical_query,
             inputs=[sql_history_dropdown],
             outputs=[sql_input]
+        )
+        
+        # Save Pattern
+        save_pattern_btn.click(
+            fn=save_new_pattern,
+            inputs=[save_pattern_name, sql_input],
+            outputs=[save_status, sql_pattern_dropdown]
         )
         
         # Plugin Upload
