@@ -542,6 +542,27 @@ button[title*='Record'], button[title*='Screen'],
 /* Enhance dataframe visibility */
 .gradio-dataframe table { border-collapse: collapse; }
 
+/* Export Buttons Styling for Visibility */
+.btn-export {
+    border: 2px solid #10b981 !important;
+    background: rgba(16, 185, 129, 0.05) !important;
+    color: #059669 !important;
+    font-weight: bold !important;
+}
+
+/* Dark mode specific overrides for buttons */
+.dark .btn-export, [data-theme='dark'] .btn-export {
+    border-color: #34d399 !important;
+    color: #34d399 !important;
+    background: rgba(52, 211, 153, 0.1) !important;
+}
+
+.btn-export:hover {
+    background-color: #10b981 !important;
+    color: white !important;
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.4) !important;
+}
+
 /* Custom coloring for SQL code blocks */
 .cm-s-default .cm-keyword { color: #d73a49; font-weight: bold; }
 .cm-s-default .cm-string { color: #032f62; }
