@@ -4,6 +4,12 @@ import sqlparse
 import json
 import os
 import shutil
+import autopep8
+import importlib.util
+import inspect
+import io
+import contextlib
+import tempfile
 import sys
 import logging
 import traceback
@@ -531,6 +537,209 @@ def upload_plugin(file_obj):
     new_choices = get_analyzer_choices()
     return f"✅ Plugin '{filename}' installed successfully!", gr.update(choices=new_choices)
 
+# --- Plugin Editor Helper Functions ---
+
+def get_plugin_list():
+    """List all available plugins, distinguishing between built-in and custom."""
+    # Built-in
+    import duckdb_processor.analysts as analysts_pkg
+    builtin_path = analysts_pkg.__path__[0]
+    builtins = [f for f in os.listdir(builtin_path) if f.endswith(".py") and not f.startswith("__") and not f.startswith("_")]
+    
+    # Custom
+    base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
+    plugins_dir = os.path.join(base_dir, "analysts_plugins")
+    os.makedirs(plugins_dir, exist_ok=True)
+    customs = [f for f in os.listdir(plugins_dir) if f.endswith(".py") and not f.startswith("_")]
+    
+    # Combine with prefixes
+    choices = [f"Built-in: {p}" for p in sorted(builtins)] + [f"Custom: {p}" for p in sorted(customs)]
+    return choices
+
+def load_plugin_code(plugin_choice):
+    """Load the source code of a selected plugin."""
+    if not plugin_choice:
+        return "", "", gr.update()
+        
+    try:
+        parts = plugin_choice.split(": ")
+        category, filename = parts[0], parts[1]
+        
+        if category == "Built-in":
+            import duckdb_processor.analysts as analysts_pkg
+            source_path = os.path.join(analysts_pkg.__path__[0], filename)
+            is_readonly = True
+        else:
+            base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
+            source_path = os.path.join(base_dir, "analysts_plugins", filename)
+            is_readonly = False
+            
+        with open(source_path, "r") as f:
+            code = f.read()
+            
+        # Extract name for the plugin_name field
+        # Simple heuristic: look for name = "..."
+        import re
+        name_match = re.search(r'name\s*=\s*["\']([^"\']+)["\']', code)
+        plugin_name = name_match.group(1).replace('.py', '') if name_match else filename.replace('.py', '')
+        
+        status = f"✅ Loaded {category} plugin: {filename}"
+        if is_readonly:
+            status += " (READ-ONLY)"
+            
+        return code, plugin_name, status
+    except Exception as e:
+        return f"# Error loading plugin: {e}", "", f"❌ Error: {e}"
+
+def save_plugin_file(plugin_name, code):
+    """Save the provided code to a custom plugin file."""
+    if not plugin_name or not code:
+        return "⚠️ Please provide a name and some code.", gr.update(), gr.update()
+        
+    filename = plugin_name if plugin_name.endswith(".py") else f"{plugin_name}.py"
+    
+    # Basic validation: must contain @register and BaseAnalyzer
+    if "@register" not in code or "BaseAnalyzer" not in code:
+        return "❌ Error: Plugin code must include the @register decorator and subclass BaseAnalyzer.", gr.update(), gr.update()
+
+    try:
+        base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
+        plugins_dir = os.path.join(base_dir, "analysts_plugins")
+        os.makedirs(plugins_dir, exist_ok=True)
+        
+        save_path = os.path.join(plugins_dir, filename)
+        with open(save_path, "w") as f:
+            f.write(code)
+            
+        # Reset discovery flag to force reload
+        import duckdb_processor.analyzer as analyzer_mod
+        analyzer_mod._discovered = False
+        
+        new_choices = get_analyzer_choices()
+        plugin_choices = get_plugin_list()
+        
+        return f"✅ Plugin '{filename}' saved to analysts_plugins/", gr.update(choices=new_choices), gr.update(choices=plugin_choices)
+    except Exception as e:
+        return f"❌ Error saving plugin: {e}", gr.update(), gr.update()
+
+def delete_plugin_file(plugin_choice):
+    """Delete a custom plugin file."""
+    if not plugin_choice or "Built-in" in plugin_choice:
+        return "⚠️ You can only delete custom plugins.", gr.update(), gr.update()
+        
+    try:
+        filename = plugin_choice.split(": ")[1]
+        base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
+        path = os.path.join(base_dir, "analysts_plugins", filename)
+        
+        if os.path.exists(path):
+            os.remove(path)
+            
+            # Reset discovery flag
+            import duckdb_processor.analyzer as analyzer_mod
+            analyzer_mod._discovered = False
+            
+            return f"✅ Plugin '{filename}' deleted.", gr.update(choices=get_analyzer_choices()), gr.update(choices=get_plugin_list())
+        return "❌ Plugin file not found.", gr.update(), gr.update()
+    except Exception as e:
+        return f"❌ Error deleting plugin: {e}", gr.update(), gr.update()
+
+def prettify_python_code(code):
+    """Format the Python code using autopep8."""
+    if not code:
+        return ""
+    try:
+        formatted = autopep8.fix_code(code, options={'aggressive': 1})
+        return formatted
+    except Exception as e:
+        logger.error(f"Prettify error: {e}")
+        return code
+
+def new_plugin_template():
+    """Load the starter template for a new plugin."""
+    import duckdb_processor.analysts as analysts_pkg
+    template_path = os.path.join(analysts_pkg.__path__[0], "_template.py")
+    try:
+        with open(template_path, "r") as f:
+            return f.read(), "my_new_plugin", "✅ Template loaded. Customize and save!"
+    except:
+        # Fallback if _template.py isn't found
+        fallback = """from duckdb_processor.analyzer import BaseAnalyzer, register
+
+@register
+class MyAnalysis(BaseAnalyzer):
+    name = "my_analysis"
+    description = "A custom analysis module"
+
+    def run(self, p):
+        # Your logic here
+        print("Analysis running...")
+        # result = p.preview(5)
+        # return result
+"""
+        return fallback, "my_new_plugin", "✅ New plugin template created."
+
+def test_custom_plugin(code):
+    """Dynamically execute the plugin code and test it against the loaded data."""
+    global global_processor
+    if global_processor is None:
+        return "❌ Error: Please load data first (Data Preview tab).", None, "No logs."
+        
+    if not code or "@register" not in code:
+        return "❌ Error: Invalid plugin code (missing @register decoration).", None, "No logs."
+
+    # Capture stdout
+    stdout_buffer = io.StringIO()
+    
+    try:
+        # 1. Create a temporary module to execute the code
+        with tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode='w') as tmp:
+            tmp.write(code)
+            tmp_path = tmp.name
+
+        try:
+            # 2. Dynamically load the module
+            spec = importlib.util.spec_from_file_location("test_plugin_mod", tmp_path)
+            module = importlib.util.module_from_spec(spec)
+            
+            with contextlib.redirect_stdout(stdout_buffer):
+                spec.loader.exec_module(module)
+                
+                # 3. Find the registered analyzer class in this module
+                # The @register decorator will have added it to _registry
+                # We need to find which one was just added. 
+                # A safer way: scan module attributes for BaseAnalyzer subclasses
+                analyzer_cls = None
+                for attr_name in dir(module):
+                    attr = getattr(module, attr_name)
+                    if (inspect.isclass(attr) and 
+                        attr.__module__ == "test_plugin_mod" and 
+                        "BaseAnalyzer" in [base.__name__ for base in inspect.getmro(attr)]):
+                        analyzer_cls = attr
+                        break
+                
+                if not analyzer_cls:
+                    return "❌ Error: No BaseAnalyzer subclass found in the code.", None, stdout_buffer.getvalue()
+                
+                # 4. Run the analyzer
+                analyzer_instance = analyzer_cls()
+                analyzer_instance.run(global_processor)
+                
+                # 5. Get the last result from the processor
+                result_df = global_processor.last_result
+                
+                log_output = stdout_buffer.getvalue() or "Plugin executed with no console output."
+                return f"✅ Plugin '{analyzer_instance.name}' tested successfully!", result_df, log_output
+                
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+                
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        logger.error(f"Plugin test error: {e}")
+        return f"❌ Execution Error: {e}", None, stdout_buffer.getvalue() + "\n" + error_trace
+
 # Custom CSS for UI polish
 custom_css = """
 /* Hide Screen Studio / Recording tools */
@@ -596,6 +805,25 @@ button[title*='Record'], button[title*='Screen'],
 /* Dark Mode Override */
 .dark .btn-save { color: #38bdf8 !important; border-color: #0369a1 !important; background: #082f49 !important; }
 .dark .btn-save:hover { background: #0c4a6e !important; color: #7dd3fc !important; border-color: #38bdf8 !important; }
+
+/* Test Button - Emerald/Success */
+.btn-test { background: linear-gradient(90deg, #10b981, #059669) !important; color: white !important; font-weight: bold !important; border: none !important; }
+.btn-test:hover { box-shadow: 0 0 15px rgba(16, 185, 129, 0.4) !important; transform: translateY(-1px); }
+
+/* Delete Button - Rose/Danger */
+.btn-delete { color: #e11d48 !important; border: 1px solid #fecdd3 !important; background: #fff1f2 !important; }
+.btn-delete:hover { background: #f43f5e !important; color: white !important; border-color: #f43f5e !important; }
+.dark .btn-delete { color: #fb7185 !important; border-color: #881337 !important; background: #4c0519 !important; }
+.dark .btn-delete:hover { background: #e11d48 !important; color: white !important; }
+
+/* New Button - Indigo */
+.btn-new { color: #4f46e5 !important; border: 1px solid #c7d2fe !important; background: #eef2ff !important; }
+.btn-new:hover { background: #4f46e5 !important; color: white !important; }
+.dark .btn-new { color: #818cf8 !important; border-color: #312e81 !important; background: #1e1b4b !important; }
+.dark .btn-new:hover { background: #4f46e5 !important; color: white !important; }
+
+/* Logs View */
+.logs-view { font-family: 'Fira Code', monospace !important; font-size: 13px !important; line-height: 1.4 !important; }
 """
 
 def create_ui():
@@ -668,70 +896,115 @@ def create_ui():
                     # -----------------------------
                     # TAB 3: Run Analytics
                     # -----------------------------
+                    # -----------------------------
+                    # TAB 3: Run Analytics
+                    # -----------------------------
                     with gr.Tab("Run Analytics") as analysis_tab:
-                        gr.Markdown("### 📈 Built-in and Custom Analyzers")
-                        
-                        analyzer_choices = get_analyzer_choices()
-                        
-                        with gr.Row():
-                            with gr.Column(scale=2):
-                                analyzer_dropdown = gr.Dropdown(
-                                    choices=analyzer_choices, 
-                                    label="Select Analyzer"
-                                )
-                                with gr.Row():
-                                    row_slider_analysis = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows")
-                                    col_dropdown_analysis = gr.Dropdown(choices=["5", "10", "20", "50", "All"], value="All", label="Cols")
-                                run_analyzer_btn = gr.Button("▶ Run Analyzer", variant="primary", elem_classes=["btn-run"])
+                        with gr.Tabs():
+                            # Sub-tab 3.1: Running Analyzers
+                            with gr.Tab("📈 Run Analyzers"):
+                                gr.Markdown("### 🚀 Execute Analysis Modules")
                                 
-                            with gr.Column(scale=1):
-                                plugin_upload = gr.File(label="Drop custom plugin (.py)", file_types=[".py"])
-                                plugin_status = gr.Textbox(label="Plugin Status", lines=1, interactive=False)
-                        
-                        analyzer_status = gr.Textbox(label="Status", lines=1, interactive=False)
-                        
-                        # Export buttons
-                        with gr.Row():
-                            gr.Markdown("**Export Last Result:**")
-                            export_csv_btn = gr.Button("CSV", size="sm", elem_classes=["btn-export"])
-                            export_json_btn = gr.Button("JSON", size="sm", elem_classes=["btn-export"])
-                            export_parquet_btn = gr.Button("Parquet", size="sm", elem_classes=["btn-export"])
-                            export_xlsx_btn = gr.Button("Excel", size="sm", elem_classes=["btn-export"])
-                        
-                        export_download = gr.File(label="Download Exported File", visible=False)
-                        
-                        analyzer_results = gr.Dataframe(
-                            label="Analysis Results",
-                            interactive=False,
-                            wrap=True,
-                            elem_id="analysis-results",
-                            max_height=500
-                        )
-                        analysis_css_override = gr.HTML("")
-                        
-                        gr.Markdown("---")
-                        gr.Markdown("### 📊 Visualization Control")
-                        with gr.Row():
-                            analysis_chart_type = gr.Dropdown(
-                                choices=["Bar", "Line", "Scatter", "Pie", "Histogram"], 
-                                value="Bar", 
-                                label="Chart Type"
-                            )
-                            analysis_x_axis = gr.Dropdown(choices=[], label="X-Axis")
-                            analysis_y_axis = gr.Dropdown(choices=[], label="Y-Axis")
-                        
-                        with gr.Row():
-                            analysis_color_by = gr.Dropdown(choices=[], label="Color By")
-                            analysis_facet_by = gr.Dropdown(choices=[], label="Facet By")
-                        
-                        with gr.Row():
-                            analysis_show_trend = gr.Checkbox(label="Show Trend Line (Scatter Only)", value=False)
-                            analysis_dark_toggle = gr.Checkbox(label="Dark Mode Charts", value=False)
-                        
-                        analysis_chart_display = gr.Plot(label="Analysis Chart")
-                        
-                        # Added this to keep "Auto Chart" around if needed
-                        analysis_auto_chart_state = gr.State(None)
+                                analyzer_choices = get_analyzer_choices()
+                                
+                                with gr.Row():
+                                    with gr.Column(scale=2):
+                                        analyzer_dropdown = gr.Dropdown(
+                                            choices=analyzer_choices, 
+                                            label="Select Analyzer"
+                                        )
+                                        with gr.Row():
+                                            row_slider_analysis = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows")
+                                            col_dropdown_analysis = gr.Dropdown(choices=["5", "10", "20", "50", "All"], value="All", label="Cols")
+                                        run_analyzer_btn = gr.Button("▶ Run Analyzer", variant="primary", elem_classes=["btn-run"])
+                                        
+                                    with gr.Column(scale=1):
+                                        plugin_upload = gr.File(label="Quick Upload (.py)", file_types=[".py"])
+                                        plugin_status = gr.Textbox(label="Upload Status", lines=1, interactive=False)
+                                
+                                analyzer_status = gr.Textbox(label="Status", lines=1, interactive=False)
+                                
+                                # Export buttons
+                                with gr.Row():
+                                    gr.Markdown("**Export Last Result:**")
+                                    export_csv_btn = gr.Button("CSV", size="sm", elem_classes=["btn-export"])
+                                    export_json_btn = gr.Button("JSON", size="sm", elem_classes=["btn-export"])
+                                    export_parquet_btn = gr.Button("Parquet", size="sm", elem_classes=["btn-export"])
+                                    export_xlsx_btn = gr.Button("Excel", size="sm", elem_classes=["btn-export"])
+                                
+                                export_download = gr.File(label="Download Exported File", visible=False)
+                                
+                                analyzer_results = gr.Dataframe(
+                                    label="Analysis Results",
+                                    interactive=False,
+                                    wrap=True,
+                                    elem_id="analysis-results",
+                                    max_height=500
+                                )
+                                analysis_css_override = gr.HTML("")
+                                
+                                gr.Markdown("---")
+                                gr.Markdown("### 📊 Visualization Control")
+                                with gr.Row():
+                                    analysis_chart_type = gr.Dropdown(
+                                        choices=["Bar", "Line", "Scatter", "Pie", "Histogram"], 
+                                        value="Bar", 
+                                        label="Chart Type"
+                                    )
+                                    analysis_x_axis = gr.Dropdown(choices=[], label="X-Axis")
+                                    analysis_y_axis = gr.Dropdown(choices=[], label="Y-Axis")
+                                
+                                with gr.Row():
+                                    analysis_color_by = gr.Dropdown(choices=[], label="Color By")
+                                    analysis_facet_by = gr.Dropdown(choices=[], label="Facet By")
+                                
+                                with gr.Row():
+                                    analysis_show_trend = gr.Checkbox(label="Show Trend Line (Scatter Only)", value=False)
+                                    analysis_dark_toggle = gr.Checkbox(label="Dark Mode Charts", value=False)
+                                
+                                analysis_chart_display = gr.Plot(label="Analysis Chart")
+                                analysis_auto_chart_state = gr.State(None)
+
+                            # Sub-tab 3.2: Plugin Editor
+                            with gr.Tab("🐍 Plugin Editor"):
+                                gr.Markdown("### 🛠️ Python Plugin Creator & Editor")
+                                
+                                with gr.Row():
+                                    with gr.Column(scale=2):
+                                        plugin_editor_dropdown = gr.Dropdown(
+                                            choices=get_plugin_list(),
+                                            label="Browse Plugins",
+                                            info="Select any plugin to view or edit"
+                                        )
+                                    with gr.Column(scale=1):
+                                        with gr.Row():
+                                            new_plugin_btn = gr.Button("📄 New", elem_classes=["btn-new"])
+                                            load_plugin_btn = gr.Button("📂 Load", variant="secondary")
+                                            delete_plugin_btn = gr.Button("🗑️ Delete", elem_classes=["btn-delete"])
+                                
+                                with gr.Row():
+                                    plugin_name_input = gr.Textbox(label="Plugin Name (filename)", placeholder="my_custom_analysis")
+                                    plugin_save_btn = gr.Button("💾 Save Plugin", elem_classes=["btn-save"], scale=0)
+                                
+                                plugin_code_editor = gr.Code(
+                                    label="Python Source",
+                                    language="python",
+                                    lines=20,
+                                    interactive=True,
+                                    value="# Create a new analyzer or select one from the dropdown above"
+                                )
+                                
+                                with gr.Row():
+                                    prettify_plugin_btn = gr.Button("✨ Prettify Python", elem_classes=["btn-format"])
+                                    test_plugin_btn = gr.Button("▶ Test Plugin", elem_classes=["btn-test"])
+                                
+                                plugin_editor_status = gr.Textbox(label="Editor Status", lines=1, interactive=False)
+                                
+                                with gr.Row():
+                                    with gr.Column(scale=2):
+                                        plugin_test_results = gr.Dataframe(label="Test Execution Result (Last Result)", max_height=300)
+                                    with gr.Column(scale=1):
+                                        plugin_test_logs = gr.Textbox(label="Execution Logs / Console Output", lines=12, elem_classes=["logs-view"])
 
                     # -----------------------------
                     # TAB 4: SQL Editor
@@ -946,7 +1219,43 @@ def create_ui():
             outputs=[save_status, sql_pattern_dropdown]
         )
         
-        # Plugin Upload
+        # Plugin Editor Events
+        new_plugin_btn.click(
+            fn=new_plugin_template,
+            outputs=[plugin_code_editor, plugin_name_input, plugin_editor_status]
+        )
+        
+        load_plugin_btn.click(
+            fn=load_plugin_code,
+            inputs=[plugin_editor_dropdown],
+            outputs=[plugin_code_editor, plugin_name_input, plugin_editor_status]
+        )
+        
+        plugin_save_btn.click(
+            fn=save_plugin_file,
+            inputs=[plugin_name_input, plugin_code_editor],
+            outputs=[plugin_editor_status, analyzer_dropdown, plugin_editor_dropdown]
+        )
+        
+        delete_plugin_btn.click(
+            fn=delete_plugin_file,
+            inputs=[plugin_editor_dropdown],
+            outputs=[plugin_editor_status, analyzer_dropdown, plugin_editor_dropdown]
+        )
+        
+        prettify_plugin_btn.click(
+            fn=prettify_python_code,
+            inputs=[plugin_code_editor],
+            outputs=[plugin_code_editor]
+        )
+        
+        test_plugin_btn.click(
+            fn=test_custom_plugin,
+            inputs=[plugin_code_editor],
+            outputs=[plugin_editor_status, plugin_test_results, plugin_test_logs]
+        )
+        
+        # Original Plugin Upload (kept for quick drops)
         plugin_upload.upload(
             fn=upload_plugin,
             inputs=[plugin_upload],

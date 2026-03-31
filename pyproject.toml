@@ -24,6 +24,7 @@ export = [
 ui = [
     "gradio>=4.0.0",
     "sqlparse>=0.5.0",
+    "autopep8>=2.0.0",
 ]
 
 [project.scripts]
