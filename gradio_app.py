@@ -333,6 +333,28 @@ custom_css = """
 .cm-s-default .cm-keyword { color: #d73a49; font-weight: bold; }
 .cm-s-default .cm-string { color: #032f62; }
 .cm-s-default .cm-variable { color: #005cc5; }
+
+/* Load Data Button - Emerald Green */
+.btn-load { background: linear-gradient(90deg, #059669, #10b981) !important; color: white !important; border: none !important; }
+.btn-load:hover { background: linear-gradient(90deg, #047857, #059669) !important; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2) !important; }
+
+/* Run Buttons - Indigo */
+.btn-run { background: linear-gradient(90deg, #4f46e5, #6366f1) !important; color: white !important; border: none !important; }
+.btn-run:hover { background: linear-gradient(90deg, #4338ca, #4f46e5) !important; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2) !important; }
+
+/* Export Buttons - Soft Purple Outline */
+.btn-export { color: #8b5cf6 !important; border: 1px solid #c4b5fd !important; background: transparent !important; transition: all 0.2s !important; }
+.btn-export:hover { background: #8b5cf6 !important; color: white !important; border-color: #8b5cf6 !important; }
+/* Dark Mode Override */
+.dark .btn-export { color: #a78bfa !important; border-color: #4c1d95 !important; background: transparent !important; }
+.dark .btn-export:hover { background: #a78bfa !important; color: #111827 !important; border-color: #a78bfa !important; }
+
+/* Prettify Button - Amber */
+.btn-format { color: #d97706 !important; border: 1px solid #fcd34d !important; background: #fffbeb !important; transition: all 0.2s !important; }
+.btn-format:hover { background: #fef3c7 !important; color: #b45309 !important; border-color: #fbbf24 !important; }
+/* Dark Mode Override */
+.dark .btn-format { color: #fbbf24 !important; border-color: #92400e !important; background: #451a03 !important; }
+.dark .btn-format:hover { background: #78350f !important; color: #fef3c7 !important; border-color: #fbbf24 !important; }
 """
 
 def create_ui():
@@ -360,7 +382,7 @@ def create_ui():
                     header_check = gr.Checkbox(label="Has Header?", value=True)
                     kv_check = gr.Checkbox(label="Is Key-Value Pairs?", value=False)
                 
-                load_btn = gr.Button("Load Data", variant="primary")
+                load_btn = gr.Button("Load Data", variant="primary", elem_classes=["btn-load"])
                 info_box = gr.Textbox(label="Data Info & Status", lines=10, interactive=False)
                 
                 # Schema sidebar component
@@ -405,7 +427,7 @@ def create_ui():
                                 with gr.Row():
                                     row_slider_analysis = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows")
                                     col_dropdown_analysis = gr.Dropdown(choices=["5", "10", "20", "50", "All"], value="All", label="Cols")
-                                run_analyzer_btn = gr.Button("▶ Run Analyzer", variant="primary")
+                                run_analyzer_btn = gr.Button("▶ Run Analyzer", variant="primary", elem_classes=["btn-run"])
                                 
                             with gr.Column(scale=1):
                                 plugin_upload = gr.File(label="Drop custom plugin (.py)", file_types=[".py"])
@@ -416,10 +438,10 @@ def create_ui():
                         # Export buttons
                         with gr.Row():
                             gr.Markdown("**Export Last Result:**")
-                            export_csv_btn = gr.Button("CSV", size="sm")
-                            export_json_btn = gr.Button("JSON", size="sm")
-                            export_parquet_btn = gr.Button("Parquet", size="sm")
-                            export_xlsx_btn = gr.Button("Excel", size="sm")
+                            export_csv_btn = gr.Button("CSV", size="sm", elem_classes=["btn-export"])
+                            export_json_btn = gr.Button("JSON", size="sm", elem_classes=["btn-export"])
+                            export_parquet_btn = gr.Button("Parquet", size="sm", elem_classes=["btn-export"])
+                            export_xlsx_btn = gr.Button("Excel", size="sm", elem_classes=["btn-export"])
                         
                         export_download = gr.File(label="Download Exported File", visible=False)
                         
@@ -474,8 +496,8 @@ def create_ui():
                         )
                         
                         with gr.Row():
-                            run_sql_btn = gr.Button("▶ Run SQL", variant="primary")
-                            format_btn = gr.Button("✨ Prettify SQL")
+                            run_sql_btn = gr.Button("▶ Run SQL", variant="primary", elem_classes=["btn-run"])
+                            format_btn = gr.Button("✨ Prettify SQL", elem_classes=["btn-format"])
                         
                         with gr.Row():
                             row_slider_sql = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows")
@@ -486,10 +508,10 @@ def create_ui():
                         # Export buttons for SQL
                         with gr.Row():
                             gr.Markdown("**Export Last Result:**")
-                            sql_export_csv_btn = gr.Button("CSV", size="sm")
-                            sql_export_json_btn = gr.Button("JSON", size="sm")
-                            sql_export_parquet_btn = gr.Button("Parquet", size="sm")
-                            sql_export_xlsx_btn = gr.Button("Excel", size="sm")
+                            sql_export_csv_btn = gr.Button("CSV", size="sm", elem_classes=["btn-export"])
+                            sql_export_json_btn = gr.Button("JSON", size="sm", elem_classes=["btn-export"])
+                            sql_export_parquet_btn = gr.Button("Parquet", size="sm", elem_classes=["btn-export"])
+                            sql_export_xlsx_btn = gr.Button("Excel", size="sm", elem_classes=["btn-export"])
                         
                         sql_export_download = gr.File(label="Download Exported File", visible=False)
                         
@@ -614,7 +636,7 @@ def create_ui():
         # Floating Back to Top Button
         gr.HTML("""
             <button id='back-to-top' onclick='window.scrollTo({top: 0, behavior: "smooth"});'
-                    style='position: fixed; bottom: 30px; right: 30px; z-index: 1000; width: 50px; height: 50px; border-radius: 50%; background-color: #2563eb; color: white; border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.15); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px;'>
+                    style='position: fixed; bottom: 30px; right: 30px; z-index: 1000; width: 50px; height: 50px; border-radius: 50%; background-color: #4f46e5; color: white; border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.15); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px;'>
                 ⬆️
             </button>
         """)
