@@ -89,13 +89,19 @@ def generate_auto_chart(df):
     
     try:
         cols = df.columns
-        if len(cols) < 2:
-            return None
-        
-        # Try to find a numeric column for Y and categorical/date for X
-        numeric_cols = df.select_dtypes(include=['number', 'float', 'int']).columns.tolist()
+        n_cols = len(cols)
+        numeric_df = df.select_dtypes(include=['number', 'float', 'int'])
+        numeric_cols = numeric_df.columns.tolist()
         other_cols = [c for c in cols if c not in numeric_cols]
         
+        # 1. Histogram (Single Numeric Column)
+        if n_cols == 1 and numeric_cols:
+            return px.histogram(df, x=cols[0], title=f"Distribution of {cols[0]}", nbins=30)
+            
+        # 2. Heatmap (Multiple Numeric Columns - Pivot Table style)
+        if len(numeric_cols) > 2 and not other_cols:
+             return px.imshow(numeric_df, text_auto=True, title="Data Heatmap", aspect="auto")
+             
         if not numeric_cols:
             # If no numeric, try bar chart of counts for the first column
             counts = df[cols[0]].value_counts().reset_index()
@@ -105,15 +111,47 @@ def generate_auto_chart(df):
         x_col = other_cols[0] if other_cols else cols[0]
         y_col = numeric_cols[0]
         
-        # Categorize x types for better labels
+        # 3. Scatter Plot (Exactly Two Numeric Columns)
+        if len(numeric_cols) == 2 and not other_cols:
+            return px.scatter(df, x=numeric_cols[0], y=numeric_cols[1], title=f"{numeric_cols[1]} vs {numeric_cols[0]}")
+
+        # 4. Pie Chart (Few categories + 1 Numeric)
+        if len(other_cols) == 1 and len(numeric_cols) == 1:
+            n_unique = df[other_cols[0]].nunique()
+            if 1 < n_unique < 12:
+                return px.pie(df, names=other_cols[0], values=numeric_cols[0], title=f"{numeric_cols[0]} Distribution by {other_cols[0]}")
+
+        # 5. Line and Bar charts (Time-series or larger categories)
         if "date" in x_col.lower() or "time" in x_col.lower():
-            fig = px.line(df, x=x_col, y=y_col, title=f"{y_col} over {x_col}")
+            return px.line(df, x=x_col, y=y_col, title=f"{y_col} over {x_col}")
         else:
-            fig = px.bar(df, x=x_col, y=y_col, title=f"{y_col} by {x_col}")
+            return px.bar(df, x=x_col, y=y_col, title=f"{y_col} by {x_col}")
         
-        return fig
     except Exception as e:
         logger.error(f"Chart error: {e}")
+        return None
+
+def render_manual_chart(df, chart_type, x_axis, y_axis):
+    """Generate a Plotly chart based on manual user selection."""
+    if df is None or df.empty or not chart_type or not x_axis:
+        return None
+    
+    try:
+        title = f"Manual {chart_type}: {y_axis or 'Count'} by {x_axis}"
+        
+        if chart_type == "Bar":
+            return px.bar(df, x=x_axis, y=y_axis, title=title)
+        elif chart_type == "Line":
+            return px.line(df, x=x_axis, y=y_axis, title=title)
+        elif chart_type == "Scatter":
+            return px.scatter(df, x=x_axis, y=y_axis, title=title)
+        elif chart_type == "Pie":
+            return px.pie(df, names=x_axis, values=y_axis, title=title)
+        elif chart_type == "Histogram":
+            return px.histogram(df, x=x_axis, title=f"Histogram of {x_axis}")
+        
+    except Exception as e:
+        logger.error(f"Manual Chart error: {e}")
         return None
 
 def load_data(file_obj, header, kv):
@@ -176,12 +214,21 @@ def run_analysis(analyzer_name, max_rows, max_cols):
         style_injection = f"<style>#analysis-results td, #analysis-results th {{ min-width: {col_width}px !important; }}</style>"
         
         chart_fig = generate_auto_chart(df)
+        cols = df.columns.tolist()
         
-        return f"✅ Analyzer '{analyzer_name}' ran successfully!", gr.update(value=df, max_height=height_px), style_injection, chart_fig
+        return (
+            f"✅ Analyzer '{analyzer_name}' ran successfully!", 
+            gr.update(value=df, max_height=height_px), 
+            style_injection, 
+            chart_fig,
+            df,                                      # For gr.State
+            gr.update(choices=cols, value=cols[0]),  # X-Axis choices
+            gr.update(choices=cols, value=cols[1] if len(cols) > 1 else None) # Y-Axis choices
+        )
     except Exception as e:
         error_msg = f"❌ Error running analyzer: {e}"
         logger.error(error_msg)
-        return error_msg, gr.update(), gr.update(), None
+        return error_msg, gr.update(), gr.update(), None, None, gr.update(), gr.update()
 
 def execute_sql(query, max_rows, max_cols):
     """Run arbitrary SQL from the SQL Editor."""
@@ -207,18 +254,22 @@ def execute_sql(query, max_rows, max_cols):
             if len(query_history) > 20: query_history.pop()
         
         chart_fig = generate_auto_chart(df)
+        cols = df.columns.tolist()
         
         return (
             f"✅ Query executed successfully! Returned {total_rows} total rows.", 
             gr.update(value=df, max_height=height_px), 
             style_injection,
             gr.update(choices=query_history),
-            chart_fig
+            chart_fig,
+            df,                                      # For gr.State
+            gr.update(choices=cols, value=cols[0]),  # X-Axis choices
+            gr.update(choices=cols, value=cols[1] if len(cols) > 1 else None) # Y-Axis choices
         )
     except Exception as e:
         error_msg = f"❌ Error executing SQL: {e}"
         logger.error(error_msg)
-        return error_msg, gr.update(), gr.update(), gr.update(), None
+        return error_msg, gr.update(), gr.update(), gr.update(), None, None, gr.update(), gr.update()
 
 def update_sql_from_selection(pattern_name):
     """Update SQL input from pattern library."""
@@ -231,6 +282,12 @@ def apply_historical_query(query):
     if query:
         return query
     return gr.update()
+
+def prettify_sql(query):
+    """Format the SQL query using sqlparse."""
+    if not query:
+        return query
+    return sqlparse.format(query, reindent=True, keyword_case='upper')
 
 def get_analyzer_choices():
     """Retrieve available analyzers for the dropdown."""
@@ -288,6 +345,10 @@ def create_ui():
     )
     
     with gr.Blocks(title="DuckDB Processor UI", css=custom_css) as app:
+        # States to persistent data for manual charting
+        analysis_state = gr.State(None)
+        sql_state = gr.State(None)
+        
         gr.Markdown("# 🦆 DuckDB CSV Processor")
         gr.Markdown("An interactive dashboard to explore, transform, and analyze your CSV data quickly.")
         
@@ -370,7 +431,19 @@ def create_ui():
                             max_height=500
                         )
                         analysis_css_override = gr.HTML("")
-                        analysis_chart_display = gr.Plot(label="Analysis Auto-Chart")
+                        
+                        gr.Markdown("---")
+                        gr.Markdown("### 📊 Visualization Control")
+                        with gr.Row():
+                            analysis_chart_type = gr.Dropdown(
+                                choices=["Bar", "Line", "Scatter", "Pie", "Histogram"], 
+                                value="Bar", 
+                                label="Chart Type"
+                            )
+                            analysis_x_axis = gr.Dropdown(choices=[], label="X-Axis")
+                            analysis_y_axis = gr.Dropdown(choices=[], label="Y-Axis")
+                        
+                        analysis_chart_display = gr.Plot(label="Analysis Chart")
 
                     # -----------------------------
                     # TAB 4: SQL Editor
@@ -402,6 +475,7 @@ def create_ui():
                         
                         with gr.Row():
                             run_sql_btn = gr.Button("▶ Run SQL", variant="primary")
+                            format_btn = gr.Button("✨ Prettify SQL")
                         
                         with gr.Row():
                             row_slider_sql = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows")
@@ -427,7 +501,19 @@ def create_ui():
                             max_height=500
                         )
                         sql_css_override = gr.HTML("")
-                        sql_chart_display = gr.Plot(label="SQL Auto-Chart")
+                        
+                        gr.Markdown("---")
+                        gr.Markdown("### 📊 Visualization Control")
+                        with gr.Row():
+                            sql_chart_type = gr.Dropdown(
+                                choices=["Bar", "Line", "Scatter", "Pie", "Histogram"], 
+                                value="Bar", 
+                                label="Chart Type"
+                            )
+                            sql_x_axis = gr.Dropdown(choices=[], label="X-Axis")
+                            sql_y_axis = gr.Dropdown(choices=[], label="Y-Axis")
+                        
+                        sql_chart_display = gr.Plot(label="SQL Chart")
 
         # --- Event Listeners ---
         
@@ -442,15 +528,47 @@ def create_ui():
         run_analyzer_btn.click(
             fn=run_analysis,
             inputs=[analyzer_dropdown, row_slider_analysis, col_dropdown_analysis],
-            outputs=[analyzer_status, analyzer_results, analysis_css_override, analysis_chart_display]
+            outputs=[
+                analyzer_status, 
+                analyzer_results, 
+                analysis_css_override, 
+                analysis_chart_display,
+                analysis_state,
+                analysis_x_axis,
+                analysis_y_axis
+            ]
         )
+        
+        # Manual Charting (Analysis)
+        analysis_man_inputs = [analysis_state, analysis_chart_type, analysis_x_axis, analysis_y_axis]
+        analysis_chart_type.change(render_manual_chart, inputs=analysis_man_inputs, outputs=analysis_chart_display)
+        analysis_x_axis.change(render_manual_chart, inputs=analysis_man_inputs, outputs=analysis_chart_display)
+        analysis_y_axis.change(render_manual_chart, inputs=analysis_man_inputs, outputs=analysis_chart_display)
         
         # Run SQL
         run_sql_btn.click(
             fn=execute_sql,
             inputs=[sql_input, row_slider_sql, col_dropdown_sql],
-            outputs=[sql_status, sql_results, sql_css_override, sql_history_dropdown, sql_chart_display]
+            outputs=[
+                sql_status, 
+                sql_results, 
+                sql_css_override, 
+                sql_history_dropdown, 
+                sql_chart_display,
+                sql_state,
+                sql_x_axis,
+                sql_y_axis
+            ]
         )
+        
+        # Manual Charting (SQL)
+        sql_man_inputs = [sql_state, sql_chart_type, sql_x_axis, sql_y_axis]
+        sql_chart_type.change(render_manual_chart, inputs=sql_man_inputs, outputs=sql_chart_display)
+        sql_x_axis.change(render_manual_chart, inputs=sql_man_inputs, outputs=sql_chart_display)
+        sql_y_axis.change(render_manual_chart, inputs=sql_man_inputs, outputs=sql_chart_display)
+        
+        # Prettify SQL
+        format_btn.click(fn=prettify_sql, inputs=[sql_input], outputs=[sql_input])
         
         # SQL Pattern Selection
         sql_pattern_dropdown.change(
