@@ -1118,6 +1118,52 @@ button[title*='Record'], button[title*='Screen'],
 /* Report Section styling */
 .report-section-list { font-family: sans-serif; background: rgba(0,0,0,0.02); border-radius: 8px; padding: 10px; }
 .dark .report-section-list { background: rgba(255,255,255,0.02); }
+
+/* Keyboard Shortcut Badges */
+.kbd-shortcut {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 8px;
+    padding: 2px 6px;
+    background: linear-gradient(180deg, #f8f9fa, #e9ecef);
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    color: #495057;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.6);
+    line-height: 1;
+    min-width: 24px;
+    justify-content: center;
+}
+
+.dark .kbd-shortcut {
+    background: linear-gradient(180deg, #374151, #1f2937);
+    border-color: #4b5563;
+    color: #e5e7eb;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1);
+}
+
+.kbd-shortcut .modifier {
+    margin-right: 2px;
+    font-size: 10px;
+    color: #6c757d;
+}
+
+.dark .kbd-shortcut .modifier {
+    color: #9ca3af;
+}
+
+/* Animation for shortcut badge appearance */
+@keyframes shortcutFadeIn {
+    from { opacity: 0; transform: translateX(-5px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+.kbd-shortcut {
+    animation: shortcutFadeIn 0.2s ease-out;
+}
 """
 
 def create_ui():
@@ -1716,6 +1762,160 @@ def create_ui():
             inputs=[report_title, report_author, report_sections_state],
             outputs=[report_preview]
         )
+
+        # Keyboard Shortcuts JavaScript
+        gr.HTML("""
+            <script>
+                (function() {
+                    // @MX:NOTE: Keyboard shortcuts system with OS-specific key detection
+                    // Detect operating system for correct modifier key display
+                    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ||
+                                  navigator.userAgent.toUpperCase().indexOf('MAC') >= 0;
+                    const modifierKey = isMac ? '⌘' : 'Ctrl';
+                    const modifierCode = isMac ? 'MetaLeft' : 'ControlLeft';
+
+                    // Button shortcuts mapping: elem_id -> {key, shift, alt, shortcut_text}
+                    const shortcuts = {
+                        'load_btn': {key: 'l', shift: false, alt: false, text: modifierKey + '+L'},
+                        'run_analyzer_btn': {key: 'r', shift: false, alt: false, text: modifierKey + '+R'},
+                        'run_sql_btn': {key: 'Enter', shift: false, alt: false, text: modifierKey + '+↵'},
+                        'export_csv_btn': {key: 'c', shift: true, alt: false, text: modifierKey + '+Shift+C'},
+                        'export_json_btn': {key: 'j', shift: true, alt: false, text: modifierKey + '+Shift+J'},
+                        'export_parquet_btn': {key: 'p', shift: true, alt: false, text: modifierKey + '+Shift+P'},
+                        'export_xlsx_btn': {key: 'e', shift: true, alt: false, text: modifierKey + '+Shift+E'},
+                        'new_plugin_btn': {key: 'n', shift: false, alt: false, text: modifierKey + '+N'},
+                        'plugin_save_btn': {key: 's', shift: false, alt: false, text: modifierKey + '+S'},
+                        'test_plugin_btn': {key: 't', shift: false, alt: false, text: modifierKey + '+T'},
+                        'prettify_plugin_btn': {key: 'f', shift: true, alt: false, text: modifierKey + '+Shift+F'},
+                        'format_btn': {key: 'f', shift: true, alt: false, text: modifierKey + '+Shift+F'},
+                        'save_pattern_btn': {key: 's', shift: false, alt: true, text: modifierKey + '+Alt+S'},
+                        'sql_export_csv_btn': {key: 'c', shift: true, alt: false, text: modifierKey + '+Shift+C'},
+                        'sql_export_json_btn': {key: 'j', shift: true, alt: false, text: modifierKey + '+Shift+J'},
+                        'sql_export_parquet_btn': {key: 'p', shift: true, alt: false, text: modifierKey + '+Shift+P'},
+                        'sql_export_xlsx_btn': {key: 'e', shift: true, alt: false, text: modifierKey + '+Shift+E'},
+                        'save_template_btn': {key: 's', shift: false, alt: false, text: modifierKey + '+S'},
+                        'add_section_btn': {key: 'a', shift: false, alt: false, text: modifierKey + '+A'},
+                        'export_report_pdf_btn': {key: 'p', shift: false, alt: true, text: modifierKey + '+Alt+P'},
+                        'export_report_md_btn': {key: 'm', shift: false, alt: true, text: modifierKey + '+Alt+M'}
+                    };
+
+                    // Add shortcut badges to buttons
+                    function addShortcutBadges() {
+                        Object.entries(shortcuts).forEach(([elemId, shortcut]) => {
+                            // Find buttons by elem_id attribute or by clicking target
+                            const findButton = () => {
+                                // Try to find by elem_id
+                                let btn = document.querySelector(`[elem_id="${elemId}"]`);
+                                if (!btn) {
+                                    // Try to find by matching text content or class
+                                    const buttons = document.querySelectorAll('button');
+                                    for (let b of buttons) {
+                                        const id = b.getAttribute('elem_id');
+                                        if (id === elemId) return b;
+                                    }
+                                }
+                                return btn;
+                            };
+
+                            const button = findButton();
+                            if (button && !button.querySelector('.kbd-shortcut')) {
+                                // Check if button already has content we need to preserve
+                                const badge = document.createElement('span');
+                                badge.className = 'kbd-shortcut';
+                                badge.innerHTML = shortcut.text;
+                                badge.setAttribute('aria-label', `Keyboard shortcut: ${shortcut.text}`);
+
+                                // Append badge to button
+                                button.appendChild(badge);
+                            }
+                        });
+                    }
+
+                    // Find and click button by elem_id
+                    function clickButton(elemId) {
+                        const button = document.querySelector(`[elem_id="${elemId}"]`);
+                        if (button) {
+                            button.click();
+                            return true;
+                        }
+                        return false;
+                    }
+
+                    // Handle keyboard events
+                    document.addEventListener('keydown', function(event) {
+                        // Don't trigger shortcuts when typing in input fields
+                        const target = event.target;
+                        const tagName = target.tagName.toLowerCase();
+                        const isInput = tagName === 'input' || tagName === 'textarea' ||
+                                       target.isContentEditable ||
+                                       target.classList.contains('cm-content');
+
+                        // Allow Enter key in textareas/inputs to work normally
+                        // But allow Ctrl+Enter for SQL execution
+                        if (isInput && !(event.key === 'Enter' && event[modifierCode === 'MetaLeft' ? 'metaKey' : 'ctrlKey'])) {
+                            return;
+                        }
+
+                        // Check each shortcut
+                        Object.entries(shortcuts).forEach(([elemId, shortcut]) => {
+                            // Skip SQL execution shortcut if not in SQL context
+                            if (elemId === 'run_sql_btn' && !target.closest('.cm-content')) {
+                                return;
+                            }
+
+                            const modifierPressed = event[modifierCode === 'MetaLeft' ? 'metaKey' : 'ctrlKey'];
+                            const shiftPressed = event.shiftKey;
+                            const altPressed = event.altKey;
+
+                            if (modifierPressed &&
+                                shiftPressed === shortcut.shift &&
+                                altPressed === shortcut.alt &&
+                                event.key.toLowerCase() === shortcut.key.toLowerCase()) {
+
+                                event.preventDefault();
+                                event.stopPropagation();
+
+                                // Visual feedback
+                                const button = document.querySelector(`[elem_id="${elemId}"]`);
+                                if (button) {
+                                    button.style.transform = 'scale(0.95)';
+                                    setTimeout(() => button.style.transform = '', 100);
+                                }
+
+                                clickButton(elemId);
+                            }
+                        });
+                    });
+
+                    // Initialize shortcuts after DOM is ready
+                    function initShortcuts() {
+                        addShortcutBadges();
+
+                        // Re-add badges when tabs change (Gradio dynamically rebuilds DOM)
+                        const observer = new MutationObserver(() => {
+                            setTimeout(addShortcutBadges, 100);
+                        });
+
+                        // Observe the main container for changes
+                        const mainContainer = document.querySelector('.gradio-container');
+                        if (mainContainer) {
+                            observer.observe(mainContainer, {childList: true, subtree: true});
+                        }
+                    }
+
+                    // Wait for DOM to be ready
+                    if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', initShortcuts);
+                    } else {
+                        initShortcuts();
+                    }
+
+                    // Also re-initialize after a short delay to catch dynamically loaded elements
+                    setTimeout(initShortcuts, 1000);
+                    setTimeout(initShortcuts, 3000);
+                })();
+            </script>
+        """)
 
         # Floating Back to Top Button
         gr.HTML("""
