@@ -215,6 +215,52 @@ python -m duckdb_processor data.csv --run sample_data_demo,basic_patterns
 
 See [ANALYST_EXAMPLES.md](ANALYST_EXAMPLES.md) for detailed documentation of each example.
 
+## Gradio Web Interface
+
+A user-friendly web interface is available for interactive data analysis without using the command line.
+
+### One-Click Launcher Scripts
+
+The easiest way to launch the Gradio interface is using the provided launcher scripts:
+
+**macOS / Linux:**
+```bash
+./run.sh
+```
+
+**Windows:**
+```batch
+run.bat
+```
+
+These scripts will automatically:
+- ✅ Create a virtual environment (if it doesn't exist)
+- ✅ Install all required dependencies
+- ✅ Launch the Gradio web interface
+
+### Manual Launch
+
+If you prefer to launch the interface manually:
+
+```bash
+# Install UI dependencies
+pip install -e ".[ui]"
+
+# Launch Gradio app
+python gradio_app.py
+```
+
+### Gradio Interface Features
+
+- 📊 **Interactive SQL Query Builder** - Build queries without writing SQL
+- 📈 **Real-time Data Preview** - View query results instantly
+- 💾 **Export Results** - Download as CSV, JSON, or Markdown
+- 🎨 **Dark/Light Mode** - Toggle between themes
+- 📝 **Report Builder** - Generate PDF and Markdown reports
+- 🔌 **Plugin System** - Test and manage custom analysts
+
+The interface will open at `http://localhost:7860` by default.
+
 ## Development
 
 ### Running Tests
