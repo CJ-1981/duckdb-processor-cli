@@ -1820,34 +1820,38 @@ if __name__ == "__main__":
         // Detect operating system for correct modifier key display
         const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ||
                       navigator.userAgent.toUpperCase().indexOf('MAC') >= 0;
-        const modifierKey = isMac ? '⌘' : 'Ctrl';
-        const modifierCode = isMac ? 'MetaLeft' : 'ControlLeft';
 
-        // Button shortcuts mapping: elem_id -> {key, shift, alt, shortcut_text}
-        // @MX:NOTE: Using Alt combinations to avoid browser-reserved shortcuts
-        // Browser-reserved: Cmd+L (address bar), Cmd+R (reload), Cmd+S (save), etc.
+        // @MX:NOTE: Modifier key strategy
+        // Mac: Command (⌘) + Control (⌃) to avoid browser conflicts
+        // Windows/Linux: Ctrl + Alt for similar behavior
+        const primaryModifier = isMac ? '⌘' : 'Ctrl';
+        const secondaryModifier = isMac ? '⌃' : 'Alt';
+        const primaryCode = isMac ? 'metaKey' : 'ctrlKey';
+        const secondaryCode = isMac ? 'ctrlKey' : 'altKey';
+
+        // Button shortcuts mapping: elem_id -> {key, shift, ctrl, alt, shortcut_text}
         const shortcuts = {
-            'load_btn': {key: 'o', shift: false, alt: true, text: modifierKey + '+Alt+O'},
-            'run_analyzer_btn': {key: 'a', shift: false, alt: true, text: modifierKey + '+Alt+A'},
-            'run_sql_btn': {key: 'Enter', shift: false, alt: false, text: modifierKey + '+↵'},
-            'export_csv_btn': {key: '1', shift: false, alt: true, text: modifierKey + '+Alt+1'},
-            'export_json_btn': {key: '2', shift: false, alt: true, text: modifierKey + '+Alt+2'},
-            'export_parquet_btn': {key: '3', shift: false, alt: true, text: modifierKey + '+Alt+3'},
-            'export_xlsx_btn': {key: '4', shift: false, alt: true, text: modifierKey + '+Alt+4'},
-            'new_plugin_btn': {key: 'n', shift: false, alt: true, text: modifierKey + '+Alt+N'},
-            'plugin_save_btn': {key: 's', shift: false, alt: true, text: modifierKey + '+Alt+S'},
-            'test_plugin_btn': {key: 't', shift: false, alt: true, text: modifierKey + '+Alt+T'},
-            'prettify_plugin_btn': {key: 'f', shift: false, alt: true, text: modifierKey + '+Alt+F'},
-            'format_btn': {key: 'y', shift: false, alt: true, text: modifierKey + '+Alt+Y'},
-            'save_pattern_btn': {key: 'p', shift: false, alt: true, text: modifierKey + '+Alt+P'},
-            'sql_export_csv_btn': {key: '5', shift: false, alt: true, text: modifierKey + '+Alt+5'},
-            'sql_export_json_btn': {key: '6', shift: false, alt: true, text: modifierKey + '+Alt+6'},
-            'sql_export_parquet_btn': {key: '7', shift: false, alt: true, text: modifierKey + '+Alt+7'},
-            'sql_export_xlsx_btn': {key: '8', shift: false, alt: true, text: modifierKey + '+Alt+8'},
-            'save_template_btn': {key: 'v', shift: false, alt: true, text: modifierKey + '+Alt+V'},
-            'add_section_btn': {key: 'i', shift: false, alt: true, text: modifierKey + '+Alt+I'},
-            'export_report_pdf_btn': {key: '9', shift: false, alt: true, text: modifierKey + '+Alt+9'},
-            'export_report_md_btn': {key: '0', shift: false, alt: true, text: modifierKey + '+Alt+0'}
+            'load_btn': {key: 'o', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+O'},
+            'run_analyzer_btn': {key: 'a', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+A'},
+            'run_sql_btn': {key: 'Enter', shift: false, ctrl: false, alt: false, text: primaryModifier + '+↵'},
+            'export_csv_btn': {key: '1', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+1'},
+            'export_json_btn': {key: '2', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+2'},
+            'export_parquet_btn': {key: '3', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+3'},
+            'export_xlsx_btn': {key: '4', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+4'},
+            'new_plugin_btn': {key: 'n', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+N'},
+            'plugin_save_btn': {key: 's', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+S'},
+            'test_plugin_btn': {key: 't', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+T'},
+            'prettify_plugin_btn': {key: 'f', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+F'},
+            'format_btn': {key: 'y', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+Y'},
+            'save_pattern_btn': {key: 'p', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+P'},
+            'sql_export_csv_btn': {key: '5', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+5'},
+            'sql_export_json_btn': {key: '6', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+6'},
+            'sql_export_parquet_btn': {key: '7', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+7'},
+            'sql_export_xlsx_btn': {key: '8', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+8'},
+            'save_template_btn': {key: 'v', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+V'},
+            'add_section_btn': {key: 'i', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+I'},
+            'export_report_pdf_btn': {key: '9', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+9'},
+            'export_report_md_btn': {key: '0', shift: false, ctrl: true, alt: false, text: primaryModifier + '+' + secondaryModifier + '+0'}
         };
 
         // Add shortcut badges to buttons
@@ -1919,8 +1923,8 @@ if __name__ == "__main__":
                            target.classList.contains('cm-content');
 
             // Allow Enter key in textareas/inputs to work normally
-            // But allow Ctrl+Enter for SQL execution
-            if (isInput && !(event.key === 'Enter' && event[modifierCode === 'MetaLeft' ? 'metaKey' : 'ctrlKey'])) {
+            // But allow Ctrl+Enter (Mac) or Ctrl+Enter (Windows) for SQL execution
+            if (isInput && !(event.key === 'Enter' && event.ctrlKey)) {
                 return;
             }
 
@@ -1931,13 +1935,16 @@ if __name__ == "__main__":
                     return;
                 }
 
-                const modifierPressed = event[modifierCode === 'MetaLeft' ? 'metaKey' : 'ctrlKey'];
+                const primaryPressed = event[primaryCode];
+                const secondaryPressed = event[secondaryCode];
                 const shiftPressed = event.shiftKey;
-                const altPressed = event.altKey;
 
-                if (modifierPressed &&
-                    shiftPressed === shortcut.shift &&
-                    altPressed === shortcut.alt &&
+                // Check if the shortcut combination matches
+                const primaryMatch = primaryPressed === true;
+                const secondaryMatch = secondaryPressed === (shortcut.ctrl || shortcut.alt);
+                const shiftMatch = shiftPressed === (shortcut.shift || false);
+
+                if (primaryMatch && secondaryMatch && shiftMatch &&
                     event.key.toLowerCase() === shortcut.key.toLowerCase()) {
 
                     event.preventDefault();
