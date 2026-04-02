@@ -1192,7 +1192,7 @@ def create_ui():
                     header_check = gr.Checkbox(label="Has Header?", value=True)
                     kv_check = gr.Checkbox(label="Is Key-Value Pairs?", value=False)
                 
-                load_btn = gr.Button("Load Data", variant="primary", elem_classes=["btn-load"])
+                load_btn = gr.Button("Load Data", variant="primary", elem_classes=["btn-load"], elem_id="load_btn")
                 info_box = gr.Textbox(label="Data Info & Status", lines=10, interactive=False)
                 
                 # Schema sidebar component
@@ -1257,7 +1257,7 @@ def create_ui():
                                         with gr.Row():
                                             row_slider_analysis = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows")
                                             col_dropdown_analysis = gr.Dropdown(choices=["5", "10", "20", "50", "All"], value="All", label="Cols")
-                                        run_analyzer_btn = gr.Button("▶ Run Analyzer", variant="primary", elem_classes=["btn-run"])
+                                        run_analyzer_btn = gr.Button("▶ Run Analyzer", variant="primary", elem_classes=["btn-run"], elem_id="run_analyzer_btn")
                                         
                                     with gr.Column(scale=1):
                                         plugin_upload = gr.File(label="Quick Upload (.py)", file_types=[".py"])
@@ -1268,10 +1268,10 @@ def create_ui():
                                 # Export buttons
                                 with gr.Row():
                                     gr.Markdown("**Export Last Result:**")
-                                    export_csv_btn = gr.Button("CSV", size="sm", elem_classes=["btn-export"])
-                                    export_json_btn = gr.Button("JSON", size="sm", elem_classes=["btn-export"])
-                                    export_parquet_btn = gr.Button("Parquet", size="sm", elem_classes=["btn-export"])
-                                    export_xlsx_btn = gr.Button("Excel", size="sm", elem_classes=["btn-export"])
+                                    export_csv_btn = gr.Button("CSV", size="sm", elem_classes=["btn-export"], elem_id="export_csv_btn")
+                                    export_json_btn = gr.Button("JSON", size="sm", elem_classes=["btn-export"], elem_id="export_json_btn")
+                                    export_parquet_btn = gr.Button("Parquet", size="sm", elem_classes=["btn-export"], elem_id="export_parquet_btn")
+                                    export_xlsx_btn = gr.Button("Excel", size="sm", elem_classes=["btn-export"], elem_id="export_xlsx_btn")
                                 
                                 export_download = gr.File(label="Download Exported File", visible=False)
                                 
@@ -1319,13 +1319,13 @@ def create_ui():
                                         )
                                     with gr.Column(scale=1):
                                         with gr.Row():
-                                            new_plugin_btn = gr.Button("📄 New", elem_classes=["btn-new"])
+                                            new_plugin_btn = gr.Button("📄 New", elem_classes=["btn-new"], elem_id="new_plugin_btn")
                                             load_plugin_btn = gr.Button("📂 Load", variant="secondary")
                                             delete_plugin_btn = gr.Button("🗑️ Delete", elem_classes=["btn-delete"])
                                 
                                 with gr.Row():
                                     plugin_name_input = gr.Textbox(label="Plugin Name (filename)", placeholder="my_custom_analysis")
-                                    plugin_save_btn = gr.Button("💾 Save Plugin", elem_classes=["btn-save"], scale=0)
+                                    plugin_save_btn = gr.Button("💾 Save Plugin", elem_classes=["btn-save"], scale=0, elem_id="plugin_save_btn")
                                 
                                 plugin_code_editor = gr.Code(
                                     label="Python Source",
@@ -1336,8 +1336,8 @@ def create_ui():
                                 )
                                 
                                 with gr.Row():
-                                    prettify_plugin_btn = gr.Button("✨ Prettify Python", elem_classes=["btn-format"])
-                                    test_plugin_btn = gr.Button("▶ Test Plugin", elem_classes=["btn-test"])
+                                    prettify_plugin_btn = gr.Button("✨ Prettify Python", elem_classes=["btn-format"], elem_id="prettify_plugin_btn")
+                                    test_plugin_btn = gr.Button("▶ Test Plugin", elem_classes=["btn-test"], elem_id="test_plugin_btn")
                                 
                                 plugin_editor_status = gr.Textbox(label="Editor Status", lines=1, interactive=False)
                                 
@@ -1376,14 +1376,14 @@ def create_ui():
                         )
                         
                         with gr.Row():
-                            run_sql_btn = gr.Button("▶ Run SQL", variant="primary", elem_classes=["btn-run"])
-                            format_btn = gr.Button("✨ Prettify SQL", elem_classes=["btn-format"])
+                            run_sql_btn = gr.Button("▶ Run SQL", variant="primary", elem_classes=["btn-run"], elem_id="run_sql_btn")
+                            format_btn = gr.Button("✨ Prettify SQL", elem_classes=["btn-format"], elem_id="format_btn")
                         
                         with gr.Row():
                             with gr.Column(scale=2):
                                 save_pattern_name = gr.Textbox(label="New Pattern Name", placeholder="e.g. My Custom Analysis", interactive=True)
                             with gr.Column(scale=1):
-                                save_pattern_btn = gr.Button("💾 Save as Pattern", elem_classes=["btn-save"])
+                                save_pattern_btn = gr.Button("💾 Save as Pattern", elem_classes=["btn-save"], elem_id="save_pattern_btn")
                         
                         save_status = gr.Textbox(label="Save Status", lines=1, interactive=False)
                         
@@ -1396,10 +1396,10 @@ def create_ui():
                         # Export buttons for SQL
                         with gr.Row():
                             gr.Markdown("**Export Last Result:**")
-                            sql_export_csv_btn = gr.Button("CSV", size="sm", elem_classes=["btn-export"])
-                            sql_export_json_btn = gr.Button("JSON", size="sm", elem_classes=["btn-export"])
-                            sql_export_parquet_btn = gr.Button("Parquet", size="sm", elem_classes=["btn-export"])
-                            sql_export_xlsx_btn = gr.Button("Excel", size="sm", elem_classes=["btn-export"])
+                            sql_export_csv_btn = gr.Button("CSV", size="sm", elem_classes=["btn-export"], elem_id="sql_export_csv_btn")
+                            sql_export_json_btn = gr.Button("JSON", size="sm", elem_classes=["btn-export"], elem_id="sql_export_json_btn")
+                            sql_export_parquet_btn = gr.Button("Parquet", size="sm", elem_classes=["btn-export"], elem_id="sql_export_parquet_btn")
+                            sql_export_xlsx_btn = gr.Button("Excel", size="sm", elem_classes=["btn-export"], elem_id="sql_export_xlsx_btn")
                         
                         sql_export_download = gr.File(label="Download Exported File", visible=False)
                         
@@ -1457,7 +1457,7 @@ def create_ui():
                                     with gr.Row():
                                         apply_template_btn = gr.Button("📋 Apply Template", variant="secondary")
                                         save_template_name = gr.Textbox(label="Save as Template", placeholder="Template Name")
-                                        save_template_btn = gr.Button("💾 Save", scale=0)
+                                        save_template_btn = gr.Button("💾 Save", scale=0, elem_id="save_template_btn")
                             
                             with gr.Column(scale=3):
                                 with gr.Group():
@@ -1477,7 +1477,7 @@ def create_ui():
                                     )
                                     
                                     with gr.Row():
-                                        add_section_btn = gr.Button("➕ Add Section", variant="primary", elem_classes=["btn-run"])
+                                        add_section_btn = gr.Button("➕ Add Section", variant="primary", elem_classes=["btn-run"], elem_id="add_section_btn")
                                         remove_idx = gr.Number(label="Section # to Remove", precision=0, minimum=1, step=1, value=1, scale=0)
                                         remove_section_btn = gr.Button("🗑️ Remove", elem_classes=["btn-delete"], scale=0)
                                         clear_sections_btn = gr.Button("🧹 Clear All", variant="stop", scale=0)
@@ -1492,8 +1492,8 @@ def create_ui():
                                 sections_markdown_view = gr.Markdown("_No sections added yet._", elem_classes=["report-section-list"])
                                 
                                 with gr.Row():
-                                    export_report_md_btn = gr.Button("📄 Export Markdown", elem_classes=["btn-export"])
-                                    export_report_pdf_btn = gr.Button("📕 Export PDF", elem_classes=["btn-export"])
+                                    export_report_md_btn = gr.Button("📄 Export Markdown", elem_classes=["btn-export"], elem_id="export_report_md_btn")
+                                    export_report_pdf_btn = gr.Button("📕 Export PDF", elem_classes=["btn-export"], elem_id="export_report_pdf_btn")
                                 
                                 report_file_download = gr.File(label="Download Report")
                                 
