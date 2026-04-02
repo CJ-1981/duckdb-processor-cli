@@ -111,17 +111,6 @@ logs/
 *.backup
 
 # ===========================================
-# DuckDB Processor Output Files
-# ===========================================
-duckdb_output_*.txt
-duckdb_output_*.csv
-duckdb_export_*.csv
-duckdb_output_*.json
-duckdb_output_*.xlsx
-duckdb_output_*.parquet
-test_output.*
-
-# ===========================================
 # Backups
 # ===========================================
 .moai-backups/
@@ -215,6 +204,15 @@ dist-ssr/
 .vercel/
 .netlify/
 .firebase/
+
+# User Custom Patterns (preserved by moai update)
+duckdb_output_*.txt
+duckdb_output_*.csv
+duckdb_export_*.csv
+duckdb_output_*.json
+duckdb_output_*.xlsx
+duckdb_output_*.parquet
+test_output.*
 .gradio_session.json
 duck_report_*.md
 duck_report_*.pdf

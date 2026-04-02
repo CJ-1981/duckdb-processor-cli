@@ -524,7 +524,13 @@ def execute_sql(query, max_rows, max_cols, is_dark=False):
             gr.update(choices=choices_with_none, value=None)  # Facet By
         )
     except Exception as e:
-        error_msg = f"❌ Error executing SQL: {e}"
+        err_str = str(e)
+        error_msg = f"❌ Error executing SQL: {err_str}"
+        
+        # Check for specific DuckDB backtick bug ('__postfix' error)
+        if "__postfix" in err_str and "`" in query:
+            error_msg += "\n\n💡 Tip: DuckDB's parser often misinterprets MySQL-style backticks (`) as postfix operators. Try using standard double quotes (\") for column names instead!"
+            
         logger.error(error_msg)
         return (
             error_msg, gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), 

@@ -100,6 +100,32 @@ Tasks for the Explore subagent:
 - Go through related test files to understand expected behavior and edge cases
 - Report comprehensive results for Phase 1B context
 
+### Phase 0.4: UltraThink Auto-Activation (Conditional)
+
+Purpose: Automatically activate deep analysis mode for complex SPECs that benefit from structured reasoning.
+
+**Activation condition**: Evaluate task complexity from Phase 1A exploration results or user request:
+- Complexity score >= 7 (multi-domain, cross-cutting concerns)
+- Request involves architectural decisions (new module, system redesign, migration)
+- Request touches security-critical areas (auth, payment, data isolation)
+- User explicitly includes `ultrathink` keyword in request
+
+**UltraThink vs --deepthink distinction**:
+- `ultrathink`: Claude Code native deep analysis mode — activates extended reasoning within the current agent context. Triggered by keyword detection in user input.
+- `--deepthink`: Sequential Thinking MCP tool invocation — programmatic step-by-step analysis via `mcp__sequential-thinking__sequentialthinking`. Triggered by explicit flag.
+
+When UltraThink auto-activates:
+- Log: "UltraThink mode activated: [reason]"
+- Apply extended reasoning to Phase 0.5 research and Phase 1B SPEC creation
+- Produce deeper analysis in research.md with trade-off comparisons and risk assessments
+- Consider alternative approaches and document rejection rationale
+
+When --deepthink flag is present (can combine with UltraThink):
+- Invoke Sequential Thinking MCP for structured step-by-step analysis
+- Each thinking step documented in research.md
+
+**Skip condition**: Simple, well-scoped features (complexity < 5, single domain, clear requirements). Log: "UltraThink skipped: low complexity task."
+
 ### Phase 0.5: Deep Research (Recommended)
 
 Agent: Explore subagent (deep codebase analysis)
@@ -365,19 +391,41 @@ Agent: manager-git subagent
 - No branch creation, no manager-git invocation
 - SPEC files remain on current branch
 
-### Phase 3.5: MX Tag Planning (Optional)
+### Phase 3.5: MX Tag Planning [MANDATORY]
 
-Purpose: Identify code locations that will need @MX annotations during implementation.
+Purpose: Identify code locations that will need @MX annotations during implementation. This information is passed to run workflow agents as context constraints.
 
-Execution conditions: SPEC involves modifying existing code OR creating new public APIs.
+Execution conditions: Always executed. Depth varies by scope:
+- **Full scan**: SPEC involves modifying existing code OR creating new public APIs
+- **Lightweight scan**: New feature with no existing code interaction (scan public API surface only)
 
 Tasks:
 - Scan target files for high fan_in functions (potential @MX:ANCHOR)
 - Identify dangerous patterns (goroutines, complexity) for @MX:WARN
 - List magic constants and business rules for @MX:NOTE
-- Document MX tag strategy in plan.md
+- Document MX tag strategy in `plan.md`
+- Output: `mx_plan` section in SPEC document with annotation targets and priorities
 
-Skip conditions: New feature with no existing code interaction.
+### Phase 3.6: SPEC Quality Gate
+
+Purpose: Verify SPEC document quality before proceeding to implementation. Catches incomplete or inconsistent specs early.
+
+Tasks:
+- Verify all EARS-format requirements have corresponding acceptance criteria
+- Check that affected files list is complete (cross-reference with codebase)
+- Validate that MX tag plan covers all high-risk areas (fan_in >= 3, goroutines)
+- Run lightweight security check on SPEC scope (flag if auth/crypto/input-validation areas are touched)
+
+Gate decision:
+- **PASS**: All checks satisfied. Proceed to Decision Point 2.
+- **WARNING**: Minor gaps found (e.g., missing acceptance criteria for edge cases). Present findings and offer fix or continue.
+- **FAIL**: Critical gaps (e.g., no acceptance criteria, security-sensitive scope without security considerations). Must fix before proceeding.
+
+Tool: AskUserQuestion (when WARNING or FAIL)
+Options:
+- Fix SPEC issues (Recommended): Return to SPEC editing with specific gaps highlighted
+- Continue with warnings: Proceed knowing gaps exist (WARNING only, not available for FAIL)
+- Abort: Exit plan workflow
 
 ### Decision Point 2: Development Environment Selection
 
@@ -468,6 +516,35 @@ All of the following must be verified:
 
 ---
 
-Version: 2.7.0
-Updated: 2026-03-11
-Changes: Added Phase 2.5 GitHub Issue creation with bidirectional SPEC-Issue linking, --no-issue flag, issue_number SPEC frontmatter field.
+## Test Scenarios
+
+### Normal Flow
+**Prompt**: "/moai plan JWT authentication with refresh token rotation"
+**Expected Result**:
+- Phase 1A: Explore discovers existing auth files if any
+- Phase 1B: manager-spec designs EARS requirements for JWT auth
+- Annotation cycle: 1-3 iterations refining requirements
+- Phase 2: SPEC-AUTH-001 created with spec.md, plan.md, acceptance.md
+- Phase 2.5: GitHub Issue created and linked to SPEC
+- Phase 3: Feature branch feat/SPEC-AUTH-001-jwt-auth created (if --branch)
+
+### Existing Assets Flow
+**Prompt**: "/moai plan add payment gateway" (existing e-commerce codebase)
+**Expected Result**:
+- Explore discovers existing order, product, user models
+- SPEC references existing models as dependencies
+- plan.md identifies extension points in existing architecture
+- No duplicate functionality proposed
+
+### Error Flow
+**Prompt**: "/moai plan" (no description provided)
+**Expected Result**:
+- AskUserQuestion prompts user for feature description
+- After user provides description, normal flow continues
+- If user cancels, graceful exit with no files created
+
+---
+
+Version: 2.8.0
+Updated: 2026-03-30
+Changes: Added test scenarios, Phase 0.9 JIT Language Detection.
