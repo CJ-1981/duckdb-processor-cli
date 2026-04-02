@@ -1763,180 +1763,8 @@ def create_ui():
             outputs=[report_preview]
         )
 
-        # Keyboard Shortcuts JavaScript
-        gr.HTML("""
-            <script>
-                (function() {
-                    // @MX:NOTE: Keyboard shortcuts system with OS-specific key detection
-                    // Detect operating system for correct modifier key display
-                    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ||
-                                  navigator.userAgent.toUpperCase().indexOf('MAC') >= 0;
-                    const modifierKey = isMac ? '⌘' : 'Ctrl';
-                    const modifierCode = isMac ? 'MetaLeft' : 'ControlLeft';
-
-                    // Button shortcuts mapping: elem_id -> {key, shift, alt, shortcut_text}
-                    const shortcuts = {
-                        'load_btn': {key: 'l', shift: false, alt: false, text: modifierKey + '+L'},
-                        'run_analyzer_btn': {key: 'r', shift: false, alt: false, text: modifierKey + '+R'},
-                        'run_sql_btn': {key: 'Enter', shift: false, alt: false, text: modifierKey + '+↵'},
-                        'export_csv_btn': {key: 'c', shift: true, alt: false, text: modifierKey + '+Shift+C'},
-                        'export_json_btn': {key: 'j', shift: true, alt: false, text: modifierKey + '+Shift+J'},
-                        'export_parquet_btn': {key: 'p', shift: true, alt: false, text: modifierKey + '+Shift+P'},
-                        'export_xlsx_btn': {key: 'e', shift: true, alt: false, text: modifierKey + '+Shift+E'},
-                        'new_plugin_btn': {key: 'n', shift: false, alt: false, text: modifierKey + '+N'},
-                        'plugin_save_btn': {key: 's', shift: false, alt: false, text: modifierKey + '+S'},
-                        'test_plugin_btn': {key: 't', shift: false, alt: false, text: modifierKey + '+T'},
-                        'prettify_plugin_btn': {key: 'f', shift: true, alt: false, text: modifierKey + '+Shift+F'},
-                        'format_btn': {key: 'f', shift: true, alt: false, text: modifierKey + '+Shift+F'},
-                        'save_pattern_btn': {key: 's', shift: false, alt: true, text: modifierKey + '+Alt+S'},
-                        'sql_export_csv_btn': {key: 'c', shift: true, alt: false, text: modifierKey + '+Shift+C'},
-                        'sql_export_json_btn': {key: 'j', shift: true, alt: false, text: modifierKey + '+Shift+J'},
-                        'sql_export_parquet_btn': {key: 'p', shift: true, alt: false, text: modifierKey + '+Shift+P'},
-                        'sql_export_xlsx_btn': {key: 'e', shift: true, alt: false, text: modifierKey + '+Shift+E'},
-                        'save_template_btn': {key: 's', shift: false, alt: false, text: modifierKey + '+S'},
-                        'add_section_btn': {key: 'a', shift: false, alt: false, text: modifierKey + '+A'},
-                        'export_report_pdf_btn': {key: 'p', shift: false, alt: true, text: modifierKey + '+Alt+P'},
-                        'export_report_md_btn': {key: 'm', shift: false, alt: true, text: modifierKey + '+Alt+M'}
-                    };
-
-                    // Add shortcut badges to buttons
-                    function addShortcutBadges() {
-                        console.log('Adding shortcut badges...');
-                        let foundCount = 0;
-                        Object.entries(shortcuts).forEach(([elemId, shortcut]) => {
-                            // Find buttons by id attribute (Gradio sets elem_id as the HTML id)
-                            const findButton = () => {
-                                // Try to find by id attribute
-                                let btn = document.getElementById(elemId);
-                                if (!btn) {
-                                    // Fallback: try to find by elem_id attribute (for older Gradio versions)
-                                    btn = document.querySelector(`[elem_id="${elemId}"]`);
-                                }
-                                if (!btn) {
-                                    // Last resort: search all buttons by id attribute
-                                    const buttons = document.querySelectorAll('button');
-                                    for (let b of buttons) {
-                                        if (b.id === elemId) return b;
-                                    }
-                                }
-                                return btn;
-                            };
-
-                            const button = findButton();
-                            if (button) {
-                                if (!button.querySelector('.kbd-shortcut')) {
-                                    // Check if button already has content we need to preserve
-                                    const badge = document.createElement('span');
-                                    badge.className = 'kbd-shortcut';
-                                    badge.innerHTML = shortcut.text;
-                                    badge.setAttribute('aria-label', `Keyboard shortcut: ${shortcut.text}`);
-
-                                    // Append badge to button
-                                    button.appendChild(badge);
-                                    foundCount++;
-                                    console.log(`✓ Added badge to ${elemId}: ${shortcut.text}`);
-                                }
-                            } else {
-                                console.log(`✗ Button not found: ${elemId}`);
-                            }
-                        });
-                        console.log(`Badge addition complete: ${foundCount}/${Object.keys(shortcuts).length} buttons updated`);
-                    }
-
-                    // Find and click button by id (Gradio sets elem_id as the HTML id)
-                    function clickButton(elemId) {
-                        // Try to find by id attribute first
-                        let button = document.getElementById(elemId);
-                        if (!button) {
-                            // Fallback: try elem_id attribute (for older Gradio versions)
-                            button = document.querySelector(`[elem_id="${elemId}"]`);
-                        }
-                        if (button) {
-                            button.click();
-                            return true;
-                        }
-                        return false;
-                    }
-
-                    // Handle keyboard events
-                    document.addEventListener('keydown', function(event) {
-                        // Don't trigger shortcuts when typing in input fields
-                        const target = event.target;
-                        const tagName = target.tagName.toLowerCase();
-                        const isInput = tagName === 'input' || tagName === 'textarea' ||
-                                       target.isContentEditable ||
-                                       target.classList.contains('cm-content');
-
-                        // Allow Enter key in textareas/inputs to work normally
-                        // But allow Ctrl+Enter for SQL execution
-                        if (isInput && !(event.key === 'Enter' && event[modifierCode === 'MetaLeft' ? 'metaKey' : 'ctrlKey'])) {
-                            return;
-                        }
-
-                        // Check each shortcut
-                        Object.entries(shortcuts).forEach(([elemId, shortcut]) => {
-                            // Skip SQL execution shortcut if not in SQL context
-                            if (elemId === 'run_sql_btn' && !target.closest('.cm-content')) {
-                                return;
-                            }
-
-                            const modifierPressed = event[modifierCode === 'MetaLeft' ? 'metaKey' : 'ctrlKey'];
-                            const shiftPressed = event.shiftKey;
-                            const altPressed = event.altKey;
-
-                            if (modifierPressed &&
-                                shiftPressed === shortcut.shift &&
-                                altPressed === shortcut.alt &&
-                                event.key.toLowerCase() === shortcut.key.toLowerCase()) {
-
-                                event.preventDefault();
-                                event.stopPropagation();
-
-                                // Visual feedback
-                                let button = document.getElementById(elemId);
-                                if (!button) {
-                                    // Fallback: try elem_id attribute (for older Gradio versions)
-                                    button = document.querySelector(`[elem_id="${elemId}"]`);
-                                }
-                                if (button) {
-                                    button.style.transform = 'scale(0.95)';
-                                    setTimeout(() => button.style.transform = '', 100);
-                                }
-
-                                clickButton(elemId);
-                            }
-                        });
-                    });
-
-                    // Initialize shortcuts after DOM is ready
-                    function initShortcuts() {
-                        addShortcutBadges();
-
-                        // Re-add badges when tabs change (Gradio dynamically rebuilds DOM)
-                        const observer = new MutationObserver(() => {
-                            setTimeout(addShortcutBadges, 100);
-                        });
-
-                        // Observe the main container for changes
-                        const mainContainer = document.querySelector('.gradio-container');
-                        if (mainContainer) {
-                            observer.observe(mainContainer, {childList: true, subtree: true});
-                        }
-                    }
-
-                    // Wait for DOM to be ready
-                    if (document.readyState === 'loading') {
-                        document.addEventListener('DOMContentLoaded', initShortcuts);
-                    } else {
-                        initShortcuts();
-                    }
-
-                    // Also re-initialize after a short delay to catch dynamically loaded elements
-                    setTimeout(initShortcuts, 1000);
-                    setTimeout(initShortcuts, 3000);
-                })();
-            </script>
-        """)
+        # Keyboard Shortcuts JavaScript (injected via Gradio's js parameter)
+        pass  # JavaScript moved to keyboard_shortcuts_js variable below
 
         # Floating Back to Top Button
         gr.HTML("""
@@ -1983,6 +1811,182 @@ def create_ui():
 
 if __name__ == "__main__":
     app, app_theme, app_css = create_ui()
+
+    # Keyboard Shortcuts JavaScript
+    keyboard_shortcuts_js = """
+    (function() {
+        console.log('Keyboard shortcuts script loading...');
+
+        // Detect operating system for correct modifier key display
+        const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ||
+                      navigator.userAgent.toUpperCase().indexOf('MAC') >= 0;
+        const modifierKey = isMac ? '⌘' : 'Ctrl';
+        const modifierCode = isMac ? 'MetaLeft' : 'ControlLeft';
+
+        // Button shortcuts mapping: elem_id -> {key, shift, alt, shortcut_text}
+        const shortcuts = {
+            'load_btn': {key: 'l', shift: false, alt: false, text: modifierKey + '+L'},
+            'run_analyzer_btn': {key: 'r', shift: false, alt: false, text: modifierKey + '+R'},
+            'run_sql_btn': {key: 'Enter', shift: false, alt: false, text: modifierKey + '+↵'},
+            'export_csv_btn': {key: 'c', shift: true, alt: false, text: modifierKey + '+Shift+C'},
+            'export_json_btn': {key: 'j', shift: true, alt: false, text: modifierKey + '+Shift+J'},
+            'export_parquet_btn': {key: 'p', shift: true, alt: false, text: modifierKey + '+Shift+P'},
+            'export_xlsx_btn': {key: 'e', shift: true, alt: false, text: modifierKey + '+Shift+E'},
+            'new_plugin_btn': {key: 'n', shift: false, alt: false, text: modifierKey + '+N'},
+            'plugin_save_btn': {key: 's', shift: false, alt: false, text: modifierKey + '+S'},
+            'test_plugin_btn': {key: 't', shift: false, alt: false, text: modifierKey + '+T'},
+            'prettify_plugin_btn': {key: 'f', shift: true, alt: false, text: modifierKey + '+Shift+F'},
+            'format_btn': {key: 'f', shift: true, alt: false, text: modifierKey + '+Shift+F'},
+            'save_pattern_btn': {key: 's', shift: false, alt: true, text: modifierKey + '+Alt+S'},
+            'sql_export_csv_btn': {key: 'c', shift: true, alt: false, text: modifierKey + '+Shift+C'},
+            'sql_export_json_btn': {key: 'j', shift: true, alt: false, text: modifierKey + '+Shift+J'},
+            'sql_export_parquet_btn': {key: 'p', shift: true, alt: false, text: modifierKey + '+Shift+P'},
+            'sql_export_xlsx_btn': {key: 'e', shift: true, alt: false, text: modifierKey + '+Shift+E'},
+            'save_template_btn': {key: 's', shift: false, alt: false, text: modifierKey + '+S'},
+            'add_section_btn': {key: 'a', shift: false, alt: false, text: modifierKey + '+A'},
+            'export_report_pdf_btn': {key: 'p', shift: false, alt: true, text: modifierKey + '+Alt+P'},
+            'export_report_md_btn': {key: 'm', shift: false, alt: true, text: modifierKey + '+Alt+M'}
+        };
+
+        // Add shortcut badges to buttons
+        function addShortcutBadges() {
+            console.log('Adding shortcut badges...');
+            let foundCount = 0;
+            Object.entries(shortcuts).forEach(([elemId, shortcut]) => {
+                // Find buttons by id attribute (Gradio sets elem_id as the HTML id)
+                const findButton = () => {
+                    // Try to find by id attribute
+                    let btn = document.getElementById(elemId);
+                    if (!btn) {
+                        // Fallback: try to find by elem_id attribute (for older Gradio versions)
+                        btn = document.querySelector(`[elem_id="${elemId}"]`);
+                    }
+                    if (!btn) {
+                        // Last resort: search all buttons by id attribute
+                        const buttons = document.querySelectorAll('button');
+                        for (let b of buttons) {
+                            if (b.id === elemId) return b;
+                        }
+                    }
+                    return btn;
+                };
+
+                const button = findButton();
+                if (button) {
+                    if (!button.querySelector('.kbd-shortcut')) {
+                        // Check if button already has content we need to preserve
+                        const badge = document.createElement('span');
+                        badge.className = 'kbd-shortcut';
+                        badge.innerHTML = shortcut.text;
+                        badge.setAttribute('aria-label', `Keyboard shortcut: ${shortcut.text}`);
+
+                        // Append badge to button
+                        button.appendChild(badge);
+                        foundCount++;
+                        console.log(`✓ Added badge to ${elemId}: ${shortcut.text}`);
+                    }
+                } else {
+                    console.log(`✗ Button not found: ${elemId}`);
+                }
+            });
+            console.log(`Badge addition complete: ${foundCount}/${Object.keys(shortcuts).length} buttons updated`);
+        }
+
+        // Find and click button by id (Gradio sets elem_id as the HTML id)
+        function clickButton(elemId) {
+            // Try to find by id attribute first
+            let button = document.getElementById(elemId);
+            if (!button) {
+                // Fallback: try elem_id attribute (for older Gradio versions)
+                button = document.querySelector(`[elem_id="${elemId}"]`);
+            }
+            if (button) {
+                button.click();
+                return true;
+            }
+            return false;
+        }
+
+        // Handle keyboard events
+        document.addEventListener('keydown', function(event) {
+            // Don't trigger shortcuts when typing in input fields
+            const target = event.target;
+            const tagName = target.tagName.toLowerCase();
+            const isInput = tagName === 'input' || tagName === 'textarea' ||
+                           target.isContentEditable ||
+                           target.classList.contains('cm-content');
+
+            // Allow Enter key in textareas/inputs to work normally
+            // But allow Ctrl+Enter for SQL execution
+            if (isInput && !(event.key === 'Enter' && event[modifierCode === 'MetaLeft' ? 'metaKey' : 'ctrlKey'])) {
+                return;
+            }
+
+            // Check each shortcut
+            Object.entries(shortcuts).forEach(([elemId, shortcut]) => {
+                // Skip SQL execution shortcut if not in SQL context
+                if (elemId === 'run_sql_btn' && !target.closest('.cm-content')) {
+                    return;
+                }
+
+                const modifierPressed = event[modifierCode === 'MetaLeft' ? 'metaKey' : 'ctrlKey'];
+                const shiftPressed = event.shiftKey;
+                const altPressed = event.altKey;
+
+                if (modifierPressed &&
+                    shiftPressed === shortcut.shift &&
+                    altPressed === shortcut.alt &&
+                    event.key.toLowerCase() === shortcut.key.toLowerCase()) {
+
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    // Visual feedback
+                    let button = document.getElementById(elemId);
+                    if (!button) {
+                        // Fallback: try elem_id attribute (for older Gradio versions)
+                        button = document.querySelector(`[elem_id="${elemId}"]`);
+                    }
+                    if (button) {
+                        button.style.transform = 'scale(0.95)';
+                        setTimeout(() => button.style.transform = '', 100);
+                    }
+
+                    clickButton(elemId);
+                }
+            });
+        });
+
+        // Initialize shortcuts after DOM is ready
+        function initShortcuts() {
+            console.log('Initializing keyboard shortcuts...');
+            addShortcutBadges();
+
+            // Re-add badges when tabs change (Gradio dynamically rebuilds DOM)
+            const observer = new MutationObserver(() => {
+                setTimeout(addShortcutBadges, 100);
+            });
+
+            // Observe the main container for changes
+            const mainContainer = document.querySelector('.gradio-container');
+            if (mainContainer) {
+                observer.observe(mainContainer, {childList: true, subtree: true});
+            }
+        }
+
+        // Wait for DOM to be ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initShortcuts);
+        } else {
+            initShortcuts();
+        }
+
+        // Also re-initialize after delays to catch dynamically loaded elements
+        setTimeout(initShortcuts, 1000);
+        setTimeout(initShortcuts, 3000);
+    })();
+    """
+
     # Configure the launch parameters
     app.launch(
         server_name="127.0.0.1",
@@ -1991,4 +1995,5 @@ if __name__ == "__main__":
         debug=False,         # Disable debug mode to hide dev tools
         theme=app_theme,
         css=app_css,
+        js=keyboard_shortcuts_js,
     )
