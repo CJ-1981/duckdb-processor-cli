@@ -1801,39 +1801,56 @@ def create_ui():
 
                     // Add shortcut badges to buttons
                     function addShortcutBadges() {
+                        console.log('Adding shortcut badges...');
+                        let foundCount = 0;
                         Object.entries(shortcuts).forEach(([elemId, shortcut]) => {
-                            // Find buttons by elem_id attribute or by clicking target
+                            // Find buttons by id attribute (Gradio sets elem_id as the HTML id)
                             const findButton = () => {
-                                // Try to find by elem_id
-                                let btn = document.querySelector(`[elem_id="${elemId}"]`);
+                                // Try to find by id attribute
+                                let btn = document.getElementById(elemId);
                                 if (!btn) {
-                                    // Try to find by matching text content or class
+                                    // Fallback: try to find by elem_id attribute (for older Gradio versions)
+                                    btn = document.querySelector(`[elem_id="${elemId}"]`);
+                                }
+                                if (!btn) {
+                                    // Last resort: search all buttons by id attribute
                                     const buttons = document.querySelectorAll('button');
                                     for (let b of buttons) {
-                                        const id = b.getAttribute('elem_id');
-                                        if (id === elemId) return b;
+                                        if (b.id === elemId) return b;
                                     }
                                 }
                                 return btn;
                             };
 
                             const button = findButton();
-                            if (button && !button.querySelector('.kbd-shortcut')) {
-                                // Check if button already has content we need to preserve
-                                const badge = document.createElement('span');
-                                badge.className = 'kbd-shortcut';
-                                badge.innerHTML = shortcut.text;
-                                badge.setAttribute('aria-label', `Keyboard shortcut: ${shortcut.text}`);
+                            if (button) {
+                                if (!button.querySelector('.kbd-shortcut')) {
+                                    // Check if button already has content we need to preserve
+                                    const badge = document.createElement('span');
+                                    badge.className = 'kbd-shortcut';
+                                    badge.innerHTML = shortcut.text;
+                                    badge.setAttribute('aria-label', `Keyboard shortcut: ${shortcut.text}`);
 
-                                // Append badge to button
-                                button.appendChild(badge);
+                                    // Append badge to button
+                                    button.appendChild(badge);
+                                    foundCount++;
+                                    console.log(`✓ Added badge to ${elemId}: ${shortcut.text}`);
+                                }
+                            } else {
+                                console.log(`✗ Button not found: ${elemId}`);
                             }
                         });
+                        console.log(`Badge addition complete: ${foundCount}/${Object.keys(shortcuts).length} buttons updated`);
                     }
 
-                    // Find and click button by elem_id
+                    // Find and click button by id (Gradio sets elem_id as the HTML id)
                     function clickButton(elemId) {
-                        const button = document.querySelector(`[elem_id="${elemId}"]`);
+                        // Try to find by id attribute first
+                        let button = document.getElementById(elemId);
+                        if (!button) {
+                            // Fallback: try elem_id attribute (for older Gradio versions)
+                            button = document.querySelector(`[elem_id="${elemId}"]`);
+                        }
                         if (button) {
                             button.click();
                             return true;
@@ -1876,7 +1893,11 @@ def create_ui():
                                 event.stopPropagation();
 
                                 // Visual feedback
-                                const button = document.querySelector(`[elem_id="${elemId}"]`);
+                                let button = document.getElementById(elemId);
+                                if (!button) {
+                                    // Fallback: try elem_id attribute (for older Gradio versions)
+                                    button = document.querySelector(`[elem_id="${elemId}"]`);
+                                }
                                 if (button) {
                                     button.style.transform = 'scale(0.95)';
                                     setTimeout(() => button.style.transform = '', 100);
