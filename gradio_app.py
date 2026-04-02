@@ -494,6 +494,13 @@ def execute_sql(query, max_rows, max_cols, is_dark=False):
     if not query or not query.strip():
         return "⚠️ Query is empty.", gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
     
+    # Auto-fix: DuckDB 1.x has a known parser bug where backticks with multi-byte or 
+    # even some ASCII chars trigger a '__postfix' scalar function error.
+    # Standard SQL uses double quotes for identifiers, so we auto-convert backticks.
+    if "`" in query:
+        logger.info("Auto-converting backticks to double quotes for DuckDB compatibility.")
+        query = query.replace("`", '"')
+
     try:
         df = global_processor.sql(query)
         total_rows = len(df)
