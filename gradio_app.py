@@ -1824,28 +1824,30 @@ if __name__ == "__main__":
         const modifierCode = isMac ? 'MetaLeft' : 'ControlLeft';
 
         // Button shortcuts mapping: elem_id -> {key, shift, alt, shortcut_text}
+        // @MX:NOTE: Using Alt combinations to avoid browser-reserved shortcuts
+        // Browser-reserved: Cmd+L (address bar), Cmd+R (reload), Cmd+S (save), etc.
         const shortcuts = {
-            'load_btn': {key: 'l', shift: false, alt: false, text: modifierKey + '+L'},
-            'run_analyzer_btn': {key: 'r', shift: false, alt: false, text: modifierKey + '+R'},
+            'load_btn': {key: 'o', shift: false, alt: true, text: modifierKey + '+Alt+O'},
+            'run_analyzer_btn': {key: 'a', shift: false, alt: true, text: modifierKey + '+Alt+A'},
             'run_sql_btn': {key: 'Enter', shift: false, alt: false, text: modifierKey + '+↵'},
-            'export_csv_btn': {key: 'c', shift: true, alt: false, text: modifierKey + '+Shift+C'},
-            'export_json_btn': {key: 'j', shift: true, alt: false, text: modifierKey + '+Shift+J'},
-            'export_parquet_btn': {key: 'p', shift: true, alt: false, text: modifierKey + '+Shift+P'},
-            'export_xlsx_btn': {key: 'e', shift: true, alt: false, text: modifierKey + '+Shift+E'},
-            'new_plugin_btn': {key: 'n', shift: false, alt: false, text: modifierKey + '+N'},
-            'plugin_save_btn': {key: 's', shift: false, alt: false, text: modifierKey + '+S'},
-            'test_plugin_btn': {key: 't', shift: false, alt: false, text: modifierKey + '+T'},
-            'prettify_plugin_btn': {key: 'f', shift: true, alt: false, text: modifierKey + '+Shift+F'},
-            'format_btn': {key: 'f', shift: true, alt: false, text: modifierKey + '+Shift+F'},
-            'save_pattern_btn': {key: 's', shift: false, alt: true, text: modifierKey + '+Alt+S'},
-            'sql_export_csv_btn': {key: 'c', shift: true, alt: false, text: modifierKey + '+Shift+C'},
-            'sql_export_json_btn': {key: 'j', shift: true, alt: false, text: modifierKey + '+Shift+J'},
-            'sql_export_parquet_btn': {key: 'p', shift: true, alt: false, text: modifierKey + '+Shift+P'},
-            'sql_export_xlsx_btn': {key: 'e', shift: true, alt: false, text: modifierKey + '+Shift+E'},
-            'save_template_btn': {key: 's', shift: false, alt: false, text: modifierKey + '+S'},
-            'add_section_btn': {key: 'a', shift: false, alt: false, text: modifierKey + '+A'},
-            'export_report_pdf_btn': {key: 'p', shift: false, alt: true, text: modifierKey + '+Alt+P'},
-            'export_report_md_btn': {key: 'm', shift: false, alt: true, text: modifierKey + '+Alt+M'}
+            'export_csv_btn': {key: '1', shift: false, alt: true, text: modifierKey + '+Alt+1'},
+            'export_json_btn': {key: '2', shift: false, alt: true, text: modifierKey + '+Alt+2'},
+            'export_parquet_btn': {key: '3', shift: false, alt: true, text: modifierKey + '+Alt+3'},
+            'export_xlsx_btn': {key: '4', shift: false, alt: true, text: modifierKey + '+Alt+4'},
+            'new_plugin_btn': {key: 'n', shift: false, alt: true, text: modifierKey + '+Alt+N'},
+            'plugin_save_btn': {key: 's', shift: false, alt: true, text: modifierKey + '+Alt+S'},
+            'test_plugin_btn': {key: 't', shift: false, alt: true, text: modifierKey + '+Alt+T'},
+            'prettify_plugin_btn': {key: 'f', shift: false, alt: true, text: modifierKey + '+Alt+F'},
+            'format_btn': {key: 'y', shift: false, alt: true, text: modifierKey + '+Alt+Y'},
+            'save_pattern_btn': {key: 'p', shift: false, alt: true, text: modifierKey + '+Alt+P'},
+            'sql_export_csv_btn': {key: '5', shift: false, alt: true, text: modifierKey + '+Alt+5'},
+            'sql_export_json_btn': {key: '6', shift: false, alt: true, text: modifierKey + '+Alt+6'},
+            'sql_export_parquet_btn': {key: '7', shift: false, alt: true, text: modifierKey + '+Alt+7'},
+            'sql_export_xlsx_btn': {key: '8', shift: false, alt: true, text: modifierKey + '+Alt+8'},
+            'save_template_btn': {key: 'v', shift: false, alt: true, text: modifierKey + '+Alt+V'},
+            'add_section_btn': {key: 'i', shift: false, alt: true, text: modifierKey + '+Alt+I'},
+            'export_report_pdf_btn': {key: '9', shift: false, alt: true, text: modifierKey + '+Alt+9'},
+            'export_report_md_btn': {key: '0', shift: false, alt: true, text: modifierKey + '+Alt+0'}
         };
 
         // Add shortcut badges to buttons
