@@ -44,10 +44,12 @@ def gradio_server():
     print("="*70)
 
     # Start the Gradio server
+    # Use DEVNULL to prevent blocking on pipe buffers
+    # Output is not needed for tests, server logs go to terminal
     proc = subprocess.Popen(
         [sys.executable, "gradio_app.py"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         cwd=Path(__file__).parent.parent,
     )
 
@@ -187,10 +189,12 @@ class TestTabStructure:
         # Wait for page to load
         await browser_page.wait_for_selector("button", timeout=5000)
 
-        # Find all tab buttons
-        tab_buttons = await browser_page.query_selector_all(
-            "button[role='tab']"
-        )
+        # Scope to top-level tablist to avoid nested/sub-tabs
+        tablist = await browser_page.query_selector("div[role='tablist']")
+        assert tablist, "No top-level tablist found"
+
+        # Find all tab buttons within the top-level tablist
+        tab_buttons = await tablist.query_selector_all("button[role='tab']")
 
         # Should have exactly 3 tabs
         assert len(tab_buttons) == 3, \
@@ -302,6 +306,9 @@ class TestAccessibility:
         # Check buttons for aria-label or proper text content
         buttons = await browser_page.query_selector_all("button")
 
+        # Guard against empty button list
+        assert len(buttons) > 0, "No buttons found in page"
+
         buttons_with_labels = 0
         for button in buttons[:20]:  # Check first 20
             has_label = await button.evaluate(
@@ -321,29 +328,73 @@ class TestAccessibility:
 
     @pytest.mark.asyncio
     async def test_color_contrast(self, browser_page: Page):
-        """Verify sufficient color contrast (WCAG AA)."""
-        # Check contrast ratio for body text
+        """Verify sufficient color contrast (WCAG AA 4.5:1 for normal text)."""
+        # Check contrast ratio for body text using actual WCAG calculation
         contrast_ratio = await browser_page.evaluate(
             """() => {
+                // Helper function to parse color to RGB
+                function parseColor(color) {
+                    // Handle rgb(r, g, b) format using split instead of regex
+                    if (color.startsWith('rgb(')) {
+                        const parts = color.slice(4, -1).split(',');
+                        return {
+                            r: parseInt(parts[0].trim()),
+                            g: parseInt(parts[1].trim()),
+                            b: parseInt(parts[2].trim())
+                        };
+                    }
+                    // Handle #rrggbb format
+                    const hexMatch = color.match(/#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i);
+                    if (hexMatch) {
+                        return {
+                            r: parseInt(hexMatch[1], 16),
+                            g: parseInt(hexMatch[2], 16),
+                            b: parseInt(hexMatch[3], 16)
+                        };
+                    }
+                    return null;
+                }
+
+                // Calculate relative luminance per WCAG 2.0
+                function getLuminance(r, g, b) {
+                    const rsRGB = r / 255;
+                    const gsRGB = g / 255;
+                    const bsRGB = b / 255;
+
+                    const rLinear = rsRGB <= 0.03928 ? rsRGB / 12.92 : Math.pow((rsRGB + 0.055) / 1.055, 2.4);
+                    const gLinear = gsRGB <= 0.03928 ? gsRGB / 12.92 : Math.pow((gsRGB + 0.055) / 1.055, 2.4);
+                    const bLinear = bsRGB <= 0.03928 ? bsRGB / 12.92 : Math.pow((bsRGB + 0.055) / 1.055, 2.4);
+
+                    return 0.2126 * rLinear + 0.7152 * gLinear + 0.0722 * bLinear;
+                }
+
+                // Calculate contrast ratio per WCAG 2.0
+                function getContrastRatio(l1, l2) {
+                    const lighter = Math.max(l1, l2);
+                    const darker = Math.min(l1, l2);
+                    return (lighter + 0.05) / (darker + 0.05);
+                }
+
                 const body = document.body;
                 const styles = window.getComputedStyle(body);
 
-                // Get background and foreground colors
-                const bg = styles.backgroundColor;
-                const color = styles.color;
+                const bgColor = parseColor(styles.backgroundColor);
+                const textColor = parseColor(styles.color);
 
-                // Simple check: is background dark and text light?
-                // This is a simplified check - full implementation would calculate actual contrast ratio
-                const bgIsDark = bg === 'rgb(30, 30, 30)' || bg === '#1e1e1e';
-                const textIsLight = color === 'rgb(232, 232, 232)' ||
-                                   color === '#e8e8e8' ||
-                                   color === 'rgb(255, 255, 255)';
+                if (!bgColor || !textColor) {
+                    return false; // Cannot determine colors
+                }
 
-                return bgIsDark && textIsLight;
+                const bgLuminance = getLuminance(bgColor.r, bgColor.g, bgColor.b);
+                const textLuminance = getLuminance(textColor.r, textColor.g, textColor.b);
+                const ratio = getContrastRatio(bgLuminance, textLuminance);
+
+                // WCAG AA requires 4.5:1 for normal text
+                return ratio >= 4.5;
             }"""
         )
 
-        assert contrast_ratio, "Insufficient color contrast detected"
+        assert contrast_ratio, "Insufficient color contrast detected (must meet WCAG AA 4.5:1)"
 
     @pytest.mark.asyncio
     async def test_semantic_html(self, browser_page: Page):
@@ -501,7 +552,7 @@ class TestTerminalNativeUX:
             }"""
         )
 
-        # Terminal UI should be flat/minimal
-        # Note: Some shadows are okay (focus indicators), but no heavy drop shadows
-        assert isinstance(has_shadows, bool), \
-            f"Interface should have clean, minimal shadows. Result: {has_shadows}"
+        # Terminal UI should be flat/minimal with no heavy drop shadows
+        # Focus indicators (0px 0px shadows) are acceptable
+        assert not has_shadows, \
+            f"Interface should have clean, minimal shadows (no heavy drop shadows). Found shadows: {has_shadows}"
