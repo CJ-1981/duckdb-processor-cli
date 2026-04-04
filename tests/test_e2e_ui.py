@@ -68,13 +68,13 @@ def gradio_server():
             if i == max_wait - 1:
                 proc.kill()
                 proc.wait()
-                raise RuntimeError("Gradio server failed to start after {max_wait}s. Last error: {e}") from e
+                raise RuntimeError(f"Gradio server failed to start after {max_wait}s. Last error: {e}") from e
         except Exception as e:
             time.sleep(1)
             if i == max_wait - 1:
                 proc.kill()
                 proc.wait()
-                raise RuntimeError("Gradio server failed to start. Unexpected error") from e
+                raise RuntimeError(f"Gradio server failed to start. Unexpected error: {e}") from e
 
     yield GRADIO_URL
 
@@ -496,9 +496,8 @@ class TestDataGripAesthetic:
             }"""
         )
 
-        # Verify compact spacing or that page loaded successfully
-        assert spacing is True or spacing is not False, \
-            f"Expected compact spacing (<=16px) for terminal aesthetic"
+        # Verify compact spacing for terminal aesthetic
+        assert spacing, "Expected compact spacing (<=16px) for terminal aesthetic"
 
     @pytest.mark.asyncio
     async def test_code_font_jetbrains_mono(self, browser_page: Page):

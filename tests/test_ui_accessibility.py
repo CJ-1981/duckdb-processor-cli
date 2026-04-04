@@ -26,7 +26,7 @@ class TestThemeConfiguration:
 
     def test_theme_colors_datagrip_inspired(self, ui_components):
         """Test theme uses DataGrip-inspired color palette."""
-        app, theme, custom_css, keyboard_shortcuts_js = ui_components
+        _, theme, _, _ = ui_components
 
         # @MX:NOTE: Theme supports both light and dark modes
         # Light mode: Clean white/blue background with dark elements
