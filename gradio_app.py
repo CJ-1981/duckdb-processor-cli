@@ -33,6 +33,34 @@ from duckdb_processor.analyzer import list_analyzers, get_analyzer
 import plotly.express as px
 import plotly.graph_objects as go
 
+# Configuration paths and default asset handling (PyInstaller support)
+def resolve_asset_path(filename):
+    """Resolve path to local working directory or bundled PyInstaller resources."""
+    if os.path.exists(filename):
+        return filename
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        bundle_path = os.path.join(sys._MEIPASS, filename)
+        if os.path.exists(bundle_path):
+            return bundle_path
+    return filename
+
+def ensure_local_configs():
+    """Copy bundled default configs to local working directory if missing."""
+    if not getattr(sys, 'frozen', False):
+        return
+    for cfg in ["sql_patterns.json", "report_templates.json"]:
+        if not os.path.exists(cfg):
+            bundled = os.path.join(sys._MEIPASS, cfg)
+            if os.path.exists(bundled):
+                try:
+                    shutil.copy(bundled, cfg)
+                    logger.info(f"Restored default config: {cfg}")
+                except Exception as e:
+                    logger.error(f"Failed to restore default config {cfg}: {e}")
+
+# Initial config restore for frozen builds
+ensure_local_configs()
+
 # SQL Patterns Library
 SQL_PATTERNS = {
     "Select Top 10": "SELECT * FROM data LIMIT 10;",

@@ -87,6 +87,24 @@ python3 -m duckdb_processor test_data.csv --run my_analysis
 
 ---
 
+## Method 5: Packaging for Windows (PyInstaller)
+
+You can package its application into standalone Windows executables (`.exe`) that do not require Python to be installed on the target machine.
+
+1. **Requirements**: A Windows machine with Python installed.
+2. **Run the build script**:
+   ```batch
+   build.bat
+   ```
+3. **Outputs**: After the build completes, check the `dist` folder for:
+   - `duckdb-processor-cli.exe`: Standalone command-line interface.
+   - `duckdb-processor-gui.exe`: Standalone graphical user interface (Gradio).
+
+> [!TIP]
+> The first time you run `build.bat`, it will create a virtual environment and install all necessary dependencies (including PyInstaller and Gradio).
+
+---
+
 ## Example SQL Queries for Interactive Mode
 
 ### 1. Preview data
