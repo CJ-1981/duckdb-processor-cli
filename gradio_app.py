@@ -1361,16 +1361,52 @@ kbd {
 }
 
 ::-webkit-scrollbar-track {
-    background: #1E1E1E;
+    background: #F0F4F8; /* Light blue-gray for light mode */
+}
+
+.dark ::-webkit-scrollbar-track {
+    background: #1E1E1E; /* Dark for dark mode */
 }
 
 ::-webkit-scrollbar-thumb {
-    background: #404040;
+    background: #B0C4DE; /* Blue-gray thumb for light mode */
     border-radius: 4px;
 }
 
+.dark ::-webkit-scrollbar-thumb {
+    background: #404040;
+}
+
 ::-webkit-scrollbar-thumb:hover {
+    background: #4A90E2;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
     background: #5C5C5C;
+}
+
+/* Fix text fields (inputs, textareas, code) for theme consistency */
+input, textarea, .gr-textbox textarea, .gr-code textarea {
+    background-color: #FFFFFF !important;
+    color: #0A0A0A !important;
+    border-color: #B0C4DE !important;
+}
+
+.dark input, .dark textarea, .dark .gr-textbox textarea, .dark .gr-code textarea {
+    background-color: #1E1E1E !important;
+    color: #E8E8E8 !important;
+    border-color: #404040 !important;
+}
+
+/* SQL editor specific fixes */
+.cm-editor, .cm-gutters {
+    background-color: #FFFFFF !important;
+    color: #0A0A0A !important;
+}
+
+.dark .cm-editor, .dark .cm-gutters {
+    background-color: #1E1E1E !important;
+    color: #E8E8E8 !important;
 }
 
 /* Hide Screen Studio / Recording tools */
@@ -1382,25 +1418,32 @@ button[title*='Record'], button[title*='Screen'],
 /* Enhance dataframe visibility */
 .gradio-dataframe table { border-collapse: collapse; }
 
-/* Export Buttons - Minimal Monochrome */
-.btn-export {
-    border: 1px solid #5C5C5C !important;
+/* Export Buttons (Light mode) */
+button.btn-export, .btn-export {
+    color: #4A90E2 !important;
+    border: 1px solid #B0B0B0 !important;
     background: transparent !important;
-    color: #E8E8E8 !important;
-    font-weight: 500 !important;
     transition: all 0.2s !important;
+    font-weight: 500 !important;
 }
 
-/* Dark mode specific overrides for buttons */
-.dark .btn-export, [data-theme='dark'] .btn-export {
-    border-color: #8C8C8C !important;
-    color: #E8E8E8 !important;
-}
-
-.btn-export:hover {
-    background-color: #5C5C5C !important;
+button.btn-export:hover, .btn-export:hover {
+    background: #4A90E2 !important;
     color: white !important;
-    border-color: #8C8C8C !important;
+    border-color: #4A90E2 !important;
+}
+
+/* Dark mode export buttons */
+.dark button.btn-export, .dark .btn-export {
+    color: #4A90E2 !important;
+    border-color: #404040 !important;
+    background: transparent !important;
+}
+
+.dark .btn-export:hover {
+    background: #4A90E2 !important;
+    color: white !important;
+    border-color: #4A90E2 !important;
 }
 
 /* Custom coloring for SQL code blocks */
@@ -1514,7 +1557,7 @@ button.btn-new:hover, .btn-new:hover { background: #4f46e5 !important; color: wh
     background: #E8F0FE !important;
     border: 1px solid #B0C4DE !important;
     border-radius: 2px;
-    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
     font-size: 11px;
     font-weight: 500;
     color: #0A0A0A !important;
@@ -1549,142 +1592,6 @@ button.btn-new:hover, .btn-new:hover { background: #4f46e5 !important; color: wh
 
 .kbd-shortcut {
     animation: shortcutFadeIn 0.2s ease-out;
-}
-
-/* Export Buttons (Light mode) */
-button.btn-export, .btn-export {
-    color: #4A90E2 !important;
-    border: 1px solid #B0B0B0 !important;
-    background: transparent !important;
-    transition: all 0.2s !important;
-    font-weight: 500 !important;
-}
-
-button.btn-export:hover, .btn-export:hover {
-    background: #4A90E2 !important;
-    color: white !important;
-    border-color: #4A90E2 !important;
-}
-
-/* Dark mode export buttons */
-.dark button.btn-export, .dark .btn-export {
-    color: #4A90E2 !important;
-    border-color: #404040 !important;
-    background: transparent !important;
-}
-
-.dark .btn-export:hover {
-    background: #4A90E2 !important;
-    color: white !important;
-    border-color: #4A90E2 !important;
-}
-
-.btn-format {
-    color: #E8E8E8 !important;
-    border: 1px solid #5C5C5C !important;
-    background: #2D2D2D !important;
-    transition: all 0.2s !important;
-    font-weight: 500 !important;
-}
-
-.btn-format:hover {
-    background: #3C3C3C !important;
-    border-color: #8C8C8C !important;
-}
-
-.dark .btn-format {
-    color: #E8E8E8 !important;
-    border-color: #5C5C5C !important;
-    background: #1E1E1E !important;
-}
-
-.dark .btn-format:hover {
-    background: #2D2D2D !important;
-    border-color: #8C8C8C !important;
-}
-
-.btn-save {
-    color: #2196F3 !important;
-    border: 1px solid #404040 !important;
-    background: #2D2D2D !important;
-    transition: all 0.2s !important;
-    font-weight: 500 !important;
-}
-
-.btn-save:hover {
-    background: #4A90E2 !important;
-    color: white !important;
-    border-color: #4A90E2 !important;
-}
-
-.dark .btn-save {
-    color: #2196F3 !important;
-    border-color: #404040 !important;
-    background: #2D2D2D !important;
-}
-
-.dark .btn-save:hover {
-    background: #4A90E2 !important;
-    color: white !important;
-    border-color: #4A90E2 !important;
-}
-
-.btn-test {
-    background: linear-gradient(90deg, #4CAF50, #45a049) !important;
-    color: white !important;
-    font-weight: 500 !important;
-    border: none !important;
-}
-
-.btn-test:hover {
-    box-shadow: none;
-}
-
-.btn-delete {
-    color: #F44336 !important;
-    border: 1px solid #404040 !important;
-    background: #2D2D2D !important;
-    transition: all 0.2s !important;
-}
-
-.btn-delete:hover {
-    background: #F44336 !important;
-    color: white !important;
-    border-color: #F44336 !important;
-}
-
-.dark .btn-delete {
-    color: #F44336 !important;
-    border-color: #404040 !important;
-    background: #2D2D2D !important;
-}
-
-.dark .btn-delete:hover {
-    background: #F44336 !important;
-    color: white !important;
-}
-
-.btn-new {
-    color: #4A90E2 !important;
-    border: 1px solid #404040 !important;
-    background: #2D2D2D !important;
-    transition: all 0.2s !important;
-}
-
-.btn-new:hover {
-    background: #4A90E2 !important;
-    color: white !important;
-}
-
-.dark .btn-new {
-    color: #4A90E2 !important;
-    border-color: #404040 !important;
-    background: #2D2D2D !important;
-}
-
-.dark .btn-new:hover {
-    background: #4A90E2 !important;
-    color: white !important;
 }
 
 /* Logs view with monospace font */
@@ -1817,7 +1724,7 @@ def create_ui():
         button_primary_background_fill_hover_dark="#8C8C8C",
         button_secondary_background_fill_hover="#D1E3FF",
         button_secondary_background_fill_hover_dark="#3A3A3A",
-        input_background_fill_focus="#2D2D2D",
+        input_background_fill_focus="#F0F7FF",
         input_background_fill_focus_dark="#2D2D2D",
         input_border_color_focus="#4A90E2",
         input_border_color_focus_dark="#4A90E2",
