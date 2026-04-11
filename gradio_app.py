@@ -45,9 +45,6 @@ from duckdb_processor.loader import load
 from duckdb_processor.config import ProcessorConfig
 from duckdb_processor.analyzer import list_analyzers, get_analyzer
 
-import plotly.express as px
-import plotly.graph_objects as go
-
 # Configuration paths and default asset handling (PyInstaller support)
 def resolve_asset_path(filename):
     """Resolve path to local working directory or bundled PyInstaller resources."""
@@ -88,6 +85,19 @@ SQL_PATTERNS = {
 
 PATTERNS_FILE = "sql_patterns.json"
 TEMPLATES_FILE = "report_templates.json"
+PLUGIN_TEMPLATE = """from duckdb_processor.analyzer import BaseAnalyzer, register
+
+@register
+class CustomPlugin(BaseAnalyzer):
+    name = "custom_plugin"
+    description = "Quick-start custom plugin template"
+
+    def run(self, p):
+        # Your logic here
+        df = p.sql("SELECT * FROM data LIMIT 100")
+        print(f"Loaded {len(df)} rows.")
+        p.last_result = df
+"""
 LAST_SESSION_FILE = ".gradio_session.json"
 
 REPORT_TEMPLATES = {
@@ -204,48 +214,33 @@ def get_execution_stats():
     global execution_stats
     return f"Rows processed: {execution_stats['rows_processed']}\nQueries executed: {execution_stats['queries_executed']}\nErrors: {execution_stats['errors']}"
 
-def get_data_profiling(is_dark=False):
-    """Fetch coverage and return a Plotly figure."""
+def get_data_profiling():
+    """Fetch coverage and summary statistics as dataframes."""
     global global_processor
     if global_processor is None:
-        return None, "No data loaded.", None
-    
-    template = "plotly_dark" if is_dark else "plotly_white"
-    bg_color = "#111827" if is_dark else "white"
+        return None, None
     
     try:
-        df = global_processor.coverage()
-        fig = px.bar(
-            df,
-            x="column",
-            y="coverage_%",
-            title="Data Coverage per Column (%)",
-            labels={"coverage_%": "Coverage Percentage", "column": "Column Name"},
-            range_y=[0, 100],
-            color="coverage_%",
-            color_continuous_scale="RdYlGn",
-            template=template
-        )
-        fig.update_layout(showlegend=False)
-        if is_dark:
-            fig.update_layout(paper_bgcolor=bg_color, plot_bgcolor=bg_color)
+        # Get coverage data
+        df_coverage = global_processor.coverage()
         
-        # New: Get summary statistics using DuckDB SUMMARIZE
-        profile_df = global_processor.con.execute(f'SUMMARIZE "{global_processor.table}"').df()
+        # Get summary statistics using DuckDB SUMMARIZE
+        df_summary = global_processor.con.execute(f'SUMMARIZE "{global_processor.table}"').df()
         
         # Explicitly round typical numeric-stat columns for readability
         for col in ['min', 'max', 'avg', 'std', 'q25', 'q50', 'q75', 'null_percentage']:
-            if col in profile_df.columns:
+            if col in df_summary.columns:
                 try:
                     # Convert to numeric (coercing non-numeric to NaN) then round
-                    numeric_series = pd.to_numeric(profile_df[col], errors='coerce')
-                    profile_df[col] = numeric_series.round(2)  # type: ignore[arg-type]
+                    numeric_series = pd.to_numeric(df_summary[col], errors='coerce')
+                    df_summary[col] = numeric_series.round(2)
                 except Exception:
                     pass
-        
-        return fig, df, profile_df
+                    
+        return df_coverage, df_summary
     except Exception as e:
-        return None, f"Error calculating metrics: {e}", None
+        logger.error(f"Profiling failed: {e}")
+        return None, None
 
 def export_results(format, df=None):
     """Export a dataframe to a specific format and return the path."""
@@ -279,10 +274,41 @@ def export_results(format, df=None):
     except Exception as e:
         logger.error(f"Export error: {e}")
         raise gr.Error(f"Export failed: {e}")
-def generate_auto_chart(df, is_dark=False):
-    """Attempt to generate a relevant chart from a dataframe."""
-    if df is None or df.empty:
-        return None
+def generate_auto_chart(df):
+    """Attempt to generate a relevant native chart update from a dataframe."""
+    hide = gr.update(visible=False, value=None)
+    bar_upd, line_upd, scatter_upd = hide, hide, hide
+    
+    if df is None or df.empty or len(df.columns) < 1:
+        return bar_upd, line_upd, scatter_upd
+    
+    try:
+        cols = df.columns.tolist()
+        numeric_df = df.select_dtypes(include=['number', 'float', 'int'])
+        numeric_cols = numeric_df.columns.tolist()
+        
+        if not numeric_cols:
+            # If no numeric, bar chart of counts for the first column
+            counts = df[cols[0]].value_counts().reset_index()
+            counts.columns = [cols[0], "count"]
+            bar_upd = gr.update(value=counts, x=cols[0], y="count", visible=True, title=f"Frequency of {cols[0]}")
+            return bar_upd, line_upd, scatter_upd
+
+        x_col = next((c for c in cols if c not in numeric_cols), cols[0])
+        y_col = numeric_cols[0]
+        
+        if "date" in str(x_col).lower() or "time" in str(x_col).lower():
+            line_upd = gr.update(value=df, x=x_col, y=y_col, visible=True, title=f"{y_col} over {x_col}")
+        else:
+            bar_upd = gr.update(value=df, x=x_col, y=y_col, visible=True, title=f"{y_col} by {x_col}")
+            
+        return bar_upd, line_upd, scatter_upd
+        
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Auto-chart failed: {e}")
+        return hide, hide, hide
+
     
     template = "plotly_dark" if is_dark else "plotly_white"
     bg_color = "#111827" if is_dark else "white"
@@ -334,100 +360,49 @@ def generate_auto_chart(df, is_dark=False):
         logger.error(f"Chart error: {e}")
         return None
 
-def render_manual_chart(df, chart_type, x_axis, y_axis, color_by=None, facet_by=None, show_trend=False, is_dark=False):
-    """Generate a Plotly chart based on manual user selection."""
-    if df is None or df.empty:
-        return None
-    
-    # Fallback: if user hasn't selected an axis or chart type yet, 
-    # show the auto-chart instead of disappearing.
-    if not chart_type or not x_axis:
-        return generate_auto_chart(df, is_dark=is_dark)
-    
-    template = "plotly_dark" if is_dark else "plotly_white"
-    bg_color = "#111827" if is_dark else "white"
-    
-    try:
-        # Create a copy so we don't mutate the original state
-        df_plot = df.copy()
-        
-        # Plotly Express needs unique column names - ensure they are unique
-        cols = []
-        counts = {}
-        for c in df_plot.columns:
-            counts[c] = counts.get(c, 0) + 1
-            if counts[c] > 1:
-                cols.append(f"{c}_{counts[c]}")
-            else:
-                cols.append(c)
-        df_plot.columns = cols
-        
-        # Mapping updated column names back to selected axes
-        # (This handles the case where user selects a column that was renamed)
-        # Assuming for now that the input names match the first occurrence.
-        
-        title = f"Manual {chart_type}: {y_axis or 'Count'} by {x_axis}"
-        if color_by: title += f" (Color by {color_by})"
-        if facet_by: title += f" (Split by {facet_by})"
-        
-        # Trend line only for Scatter
-        trend = "ols" if show_trend and chart_type == "Scatter" else None
-        
-        # Set up standard kwargs
-        kwargs = {
-            "title": title,
-            "x": x_axis,
-            "y": y_axis,
-            "color": color_by if color_by and color_by != "None" else None,
-            "facet_col": facet_by if facet_by and facet_by != "None" else None,
-            "facet_col_wrap": 2 if facet_by else None,
-            "template": template
-        }
-        
-        if chart_type == "Pie":
-            fig = px.pie(df_plot, names=x_axis, values=y_axis, title=title, template=template)
-        elif chart_type == "Histogram":
-            kwargs.pop("y", None)
-            fig = px.histogram(df_plot, **kwargs)
-        else:
-            # px.bar, px.line, px.scatter all handled by the same kwargs (in kwargs)
-            # but we need to call the right function
-            if chart_type == "Bar": 
-                fig = px.bar(df_plot, **kwargs)
-            elif chart_type == "Line": 
-                fig = px.line(df_plot, **kwargs)
-            else: 
-                if trend == "ols":
-                    # Pre-check: OLS requires numeric data
-                    try:
-                        pd.to_numeric(df_plot[x_axis])
-                        if y_axis: pd.to_numeric(df_plot[y_axis])
-                    except:
-                        raise ValueError("Trend Line (OLS) requires numeric values on both X and Y axes. Please select numeric columns or uncheck 'Show Trend Line'.")
-                    kwargs["trendline"] = trend
-                fig = px.scatter(df_plot, **kwargs)
+def get_chart_updates(df, chart_type, x_axis, y_axis, color_by=None, facet_by=None, show_trend=False):
+    """Generate updates for native Gradio plot components based on user selection."""
+    # Hide all by default
+    hide = gr.update(visible=False, value=None)
+    bar_upd, line_upd, scatter_upd = hide, hide, hide
 
-        if is_dark:
-            fig.update_layout(paper_bgcolor=bg_color, plot_bgcolor=bg_color)
-        return fig
-        
+    if df is None or df.empty or not chart_type or not x_axis:
+        return bar_upd, line_upd, scatter_upd
+
+    try:
+        # Determine which plot to show and update
+        if chart_type == "Bar":
+            bar_upd = gr.update(
+                value=df, 
+                x=x_axis, 
+                y=y_axis, 
+                color=color_by if color_by and color_by != "None" else None, 
+                visible=True,
+                title=f"{y_axis} by {x_axis}"
+            )
+        elif chart_type == "Line":
+            line_upd = gr.update(
+                value=df, 
+                x=x_axis, 
+                y=y_axis, 
+                color=color_by if color_by and color_by != "None" else None, 
+                visible=True,
+                title=f"{y_axis} over {x_axis}"
+            )
+        elif chart_type == "Scatter":
+            scatter_upd = gr.update(
+                value=df, 
+                x=x_axis, 
+                y=y_axis, 
+                color=color_by if color_by and color_by != "None" else None, 
+                visible=True,
+                title=f"{y_axis} vs {x_axis}"
+            )
+            
+        return bar_upd, line_upd, scatter_upd
     except Exception as e:
-        error_str = str(e)
-        logger.error(f"Manual Chart error: {error_str}")
-        # Return a "Visual Error" chart so the user sees the issue on the UI
-        fig = go.Figure()
-        fig.update_layout(
-            xaxis={"visible": False},
-            yaxis={"visible": False},
-            annotations=[{
-                "text": f"⚠️ Chart Error:<br>{error_str}",
-                "xref": "paper",
-                "yref": "paper",
-                "showarrow": False,
-                "font": {"size": 14, "color": "red"}
-            }]
-        )
-        return fig
+        logger.error(f"Failed to generate native chart: {e}")
+        return hide, hide, hide
 
 def save_session_to_disk(file_path, header, kv):
     """Save the last load configuration to disk for session recovery."""
@@ -447,7 +422,7 @@ def refresh_profiling(is_dark):
     fig, df_cov, df_sum = get_data_profiling(is_dark=is_dark)
     return fig
 
-def load_data(file_objs, header, kv, table_mapping="", is_dark=False, progress=gr.Progress()):
+def load_data(file_objs, header, kv, table_mapping="", progress=gr.Progress()):
     """Load the CSV into DuckDB via Processor API and return preview."""
     global global_processor, execution_stats
     
@@ -514,7 +489,7 @@ def load_data(file_objs, header, kv, table_mapping="", is_dark=False, progress=g
         schema_str = get_schema_info()
         
         progress(0.8, desc="Generating data quality profiling...")
-        health_fig, health_df, profile_df = get_data_profiling(is_dark=is_dark)
+        health_df, profile_df = get_data_profiling()
 
         tables = global_processor.get_tables()
         table_dropdown_update = gr.update(choices=tables, value=global_processor.table, visible=True)
@@ -536,16 +511,18 @@ def load_data(file_objs, header, kv, table_mapping="", is_dark=False, progress=g
             "header": header,
             "kv": kv,
             "table_mapping": table_mapping,
-            "active_table": global_processor.table
+            "active_table": global_processor.table,
+            "profile_coverage": health_df,
+            "profile_summary": profile_df
         }
 
         return (
             f"✅ Data Loaded Successfully\n\n{info_str}\n\n💡 Performance optimized for local PC.",
             preview_df,
             schema_str,
-            health_fig,
-            health_df,
-            profile_df,
+            health_df, # For gr.BarPlot
+            health_df, # For coverage table
+            profile_df, # For summary table
             gr.update(value=info_str),  # progress_box
             gr.update(value=stats_text), # exec_stats
             table_dropdown_update, # active table
@@ -556,7 +533,7 @@ def load_data(file_objs, header, kv, table_mapping="", is_dark=False, progress=g
         logger.error(f"{error_msg}\n{traceback.format_exc()}")
         raise gr.Error(error_msg)
 
-def run_analysis(analyzer_name, max_rows, max_cols, is_dark=False, progress=gr.Progress()):
+def run_analysis(analyzer_name, max_rows, max_cols, progress=gr.Progress()):
     """Run the selected analyzer against the loaded processor."""
     global global_processor
     logger.info(f"Running analysis: {analyzer_name}, max_rows={max_rows}, max_cols={max_cols}")
@@ -565,7 +542,7 @@ def run_analysis(analyzer_name, max_rows, max_cols, is_dark=False, progress=gr.P
     
     if not analyzer_name:
         gr.Warning("Please select an analyzer.")
-        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
     
     try:
         progress(0.2, desc=f"Loading analyzer {analyzer_name}...")
@@ -577,14 +554,14 @@ def run_analysis(analyzer_name, max_rows, max_cols, is_dark=False, progress=gr.P
         df = global_processor.last_result
         if df is None or df.empty:
             gr.Info(f"Analyzer '{analyzer_name}' ran successfully, but returned no results.")
-            return f"✅ Analyzer '{analyzer_name}' ran successfully!", gr.update(), gr.update(), None, None, gr.update(), gr.update(), gr.update(), gr.update()
+            return f"✅ Analyzer '{analyzer_name}' ran successfully!", gr.update(), gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), None, gr.update(), gr.update(), gr.update(), gr.update()
             
         progress(0.7, desc="Formatting and charting...")
         height_px = int(max_rows) * 35 + 80
         col_width = 150 if max_cols == "All" else (1500 // int(max_cols))
         style_injection = f"<style>#analysis-results td, #analysis-results th {{ min-width: {col_width}px !important; }}</style>"
         
-        chart_fig = generate_auto_chart(df, is_dark=is_dark)
+        bar_upd, line_upd, scatter_upd = generate_auto_chart(df)
         cols = df.columns.tolist()
         choices_with_none = [None] + cols
         
@@ -593,7 +570,9 @@ def run_analysis(analyzer_name, max_rows, max_cols, is_dark=False, progress=gr.P
             f"✅ Analyzer '{analyzer_name}' completed!", 
             gr.update(value=df, max_height=height_px), 
             style_injection, 
-            chart_fig,
+            bar_upd,
+            line_upd,
+            scatter_upd,
             df,                                      # For gr.State
             gr.update(choices=cols, value=cols[0]),  # X-Axis
             gr.update(choices=cols, value=cols[1] if len(cols) > 1 else None), # Y-Axis
@@ -605,7 +584,7 @@ def run_analysis(analyzer_name, max_rows, max_cols, is_dark=False, progress=gr.P
         logger.error(error_msg)
         raise gr.Error(error_msg)
 
-def execute_sql(query, max_rows, max_cols, is_dark=False, progress=gr.Progress()):
+def execute_sql(query, max_rows, max_cols, progress=gr.Progress()):
     """Run arbitrary SQL from the SQL Editor."""
     global global_processor, execution_stats
     logger.info(f"Executing SQL query, max_rows={max_rows}, max_cols={max_cols}")
@@ -614,7 +593,7 @@ def execute_sql(query, max_rows, max_cols, is_dark=False, progress=gr.Progress()
 
     if not query or not query.strip():
         gr.Warning("SQL query is empty.")
-        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
 
     # Auto-fix: DuckDB 1.x backtick handling
     if "`" in query:
@@ -640,7 +619,7 @@ def execute_sql(query, max_rows, max_cols, is_dark=False, progress=gr.Progress()
             if len(query_history) > 20: query_history.pop()
 
         progress(0.7, desc="Generating auto-chart...")
-        chart_fig = generate_auto_chart(df, is_dark=is_dark)
+        bar_upd, line_upd, scatter_upd = generate_auto_chart(df)
         cols = df.columns.tolist()
         choices_with_none = [None] + cols
         stats_text = get_execution_stats()
@@ -651,7 +630,9 @@ def execute_sql(query, max_rows, max_cols, is_dark=False, progress=gr.Progress()
             gr.update(value=df, max_height=height_px),
             style_injection,
             gr.update(choices=query_history),
-            chart_fig,
+            bar_upd,
+            line_upd,
+            scatter_upd,
             df,                                      # For gr.State
             gr.update(choices=cols, value=cols[0]),  # X-Axis
             gr.update(choices=cols, value=cols[1] if len(cols) > 1 else None), # Y-Axis
@@ -1185,35 +1166,39 @@ custom_css = """
 /* Override Gradio defaults with DataGrip-inspired theme */
 body, .gradio-container {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
-    /* Light mode: white background */
+}
+
+/* Light mode: white background */
+.gradio-container:not(.dark):not([data-theme='dark']) {
     background-color: #FFFFFF !important;
 }
 
 /* Dark mode override */
-.dark .gradio-container {
+.dark .gradio-container, 
+[data-theme='dark'] .gradio-container {
     background-color: #1E1E1E !important;
 }
 
 /* Gradio dataframe component - Light mode (CLEAN WHITE/BLUE THEME) */
-.gradio-container .gr-dataframe table {
+.gradio-container:not(.dark):not([data-theme='dark']) .gr-dataframe table {
     background: #FFFFFF !important;
     color: #0A0A0A !important;
 }
 
-.gradio-container .gr-dataframe th {
+.gradio-container:not(.dark):not([data-theme='dark']) .gr-dataframe th {
     background: #F0F4F8 !important; /* Light blue-gray */
     color: #0A0A0A !important;
     border-color: #D1D9E6 !important; /* Blue-gray border */
     font-weight: 600 !important;
 }
 
-.gradio-container .gr-dataframe td {
+.gradio-container:not(.dark):not([data-theme='dark']) .gr-dataframe td {
     background: #FFFFFF !important;
     color: #0A0A0A !important;
     border-color: #E8E8E8 !important; /* Very light gray border */
 }
 
-.gradio-container .gr-dataframe tr:hover td {
+.gradio-container:not(.dark):not([data-theme='dark']) .gr-dataframe tr:hover td {
     background: #F7FAFC !important; /* Subtle blue on hover */
 }
 
@@ -1266,14 +1251,14 @@ body, .gradio-container {
     top: 0;
 }
 
-.data-table td {
+.gradio-container:not(.dark):not([data-theme='dark']) .data-table td {
     padding: 8px 12px;
     border-bottom: 1px solid #E8E8E8; /* Very light gray */
     color: #0A0A0A; /* Almost black */
     background: #FFFFFF;
 }
 
-.data-table tbody tr:hover {
+.gradio-container:not(.dark):not([data-theme='dark']) .data-table tbody tr:hover {
     background: #F7FAFC; /* Subtle blue on hover */
 }
 
@@ -1421,25 +1406,41 @@ kbd {
 }
 
 /* Fix text fields (inputs, textareas, code) for theme consistency */
-input, textarea, .gr-textbox textarea, .gr-code textarea {
+/* Light mode */
+.gradio-container:not(.dark):not([data-theme='dark']) input, 
+.gradio-container:not(.dark):not([data-theme='dark']) textarea, 
+.gradio-container:not(.dark):not([data-theme='dark']) .gr-textbox textarea, 
+.gradio-container:not(.dark):not([data-theme='dark']) .gr-code textarea {
     background-color: #FFFFFF !important;
     color: #0A0A0A !important;
     border-color: #B0C4DE !important;
 }
 
-.dark input, .dark textarea, .dark .gr-textbox textarea, .dark .gr-code textarea {
+/* Dark mode */
+.dark input, 
+.dark textarea, 
+.dark .gr-textbox textarea, 
+.dark .gr-code textarea,
+[data-theme='dark'] input,
+[data-theme='dark'] textarea,
+[data-theme='dark'] .gr-textbox textarea,
+[data-theme='dark'] .gr-code textarea {
     background-color: #1E1E1E !important;
     color: #E8E8E8 !important;
     border-color: #404040 !important;
 }
 
 /* SQL editor specific fixes */
-.cm-editor, .cm-gutters {
+.gradio-container:not(.dark):not([data-theme='dark']) .cm-editor, 
+.gradio-container:not(.dark):not([data-theme='dark']) .cm-gutters {
     background-color: #FFFFFF !important;
     color: #0A0A0A !important;
 }
 
-.dark .cm-editor, .dark .cm-gutters {
+.dark .cm-editor, 
+.dark .cm-gutters,
+[data-theme='dark'] .cm-editor,
+[data-theme='dark'] .cm-gutters {
     background-color: #1E1E1E !important;
     color: #E8E8E8 !important;
 }
@@ -1651,7 +1652,7 @@ button.btn-new:hover, .btn-new:hover { background: #4f46e5 !important; color: wh
 }
 """
 
-def restore_session(state, profile_dark, sql_dark):
+def restore_session(state):
     """Restore the application state from BrowserState (localStorage)."""
     if not state or not state.get("files"):
         return [gr.update()] * 15
@@ -1663,8 +1664,7 @@ def restore_session(state, profile_dark, sql_dark):
             state["files"], 
             state["header"], 
             state["kv"], 
-            table_mapping=state.get("table_mapping", ""), 
-            is_dark=profile_dark
+            table_mapping=state.get("table_mapping", "")
         )
         
         if len(res) == 10:
@@ -1678,14 +1678,14 @@ def restore_session(state, profile_dark, sql_dark):
                     info_str = f"Rows: {info.get('rows', '?')}, Cols: {len(info.get('columns', []))}"
                     preview_df = global_processor.preview(20)
                     schema_str = get_schema_info()
-                    health_fig, health_df, profile_df = get_data_profiling(is_dark=profile_dark)
+                    health_df, profile_df = get_data_profiling()
                     
                     # Update the results from load_data with active table specific ones
                     res_list = list(res)
                     res_list[0] = f"✅ Session Restored: Table {active_table}\n\n{info_str}"
                     res_list[1] = preview_df
                     res_list[2] = schema_str
-                    res_list[3] = health_fig
+                    res_list[3] = health_df # For gr.BarPlot
                     res_list[4] = health_df
                     res_list[5] = profile_df
                     res_list[6] = gr.update(value=info_str)
@@ -1700,12 +1700,114 @@ def restore_session(state, profile_dark, sql_dark):
                 gr.update(value=state["header"]),
                 gr.update(value=state["kv"]),
                 gr.update(value=state.get("table_mapping", "")),
-                gr.update(value=state.get("sql_query", "SELECT * FROM data LIMIT 10"))
+                gr.update(value=state.get("sql_query", "SELECT * FROM data LIMIT 10;"))
             ]
     except Exception as e:
         logger.error(f"[RECOVERY] Restoration failed: {e}")
     
     return [gr.update()] * 15
+
+
+def add_report_section(sections, stype, heading, body):
+    """Add a new section to the report state."""
+    new_section = {"type": stype, "heading": heading, "body": body}
+    sections.append(new_section)
+    return sections, f"✅ Added section: {heading}"
+
+def render_sections_view(sections):
+    """Return HTML representation of sections for preview."""
+    if not sections:
+        return "<div class='report-section-list'>No sections added yet.</div>"
+    
+    html = "<div class='report-section-list' style='display: flex; flex-direction: column; gap: 10px;'>"
+    for i, s in enumerate(sections):
+        html += f'''
+        <div style="padding: 10px; border: 1px solid #ddd; border-radius: 4px; background: rgba(0,0,0,0.05);">
+            <div style="display: flex; justify-content: space-between;">
+                <span style="font-weight: 600;">{i+1}. {s['heading']}</span>
+                <span style="font-size: 11px; opacity: 0.7;">{s['type']}</span>
+            </div>
+        </div>
+        '''
+    html += "</div>"
+    return html
+
+def clear_report_sections():
+    """Reset report sections."""
+    return [], "🗑️ Report cleared."
+
+def generate_report_markdown(title, author, sections):
+    """Generate a Markdown file from report sections."""
+    if not sections:
+        raise gr.Error("Cannot generate empty report.")
+    
+    md = f"# {title}\n\n**Author:** {author}\n**Date:** {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n---\n\n"
+    
+    for s in sections:
+        md += f"## {s['heading']}\n\n"
+        if s['type'] == "Text/Note":
+            md += f"{s['body']}\n\n"
+        elif s['type'] == "Schema Info":
+            md += f"```sql\n{get_schema_info()}\n```\n\n"
+        elif s['type'] == "Data Summary":
+            info = global_processor.info() if global_processor else {}
+            md += f"- **Rows:** {info.get('rows', '?')}\n- **Columns:** {len(info.get('columns', []))}\n\n"
+        else:
+            md += "_[Table data omitted in Markdown preview]_\n\n"
+            
+    path = os.path.join(TEMP_DIR, f"report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.md")
+    with open(path, "w") as f:
+        f.write(md)
+    return path
+
+def test_analyzer_plugin(code):
+    """Execute a plugin's code in a sandbox-like environment for testing."""
+    if not code:
+        return "⚠️ No code to test.", None, ""
+    
+    stdout_buffer = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(stdout_buffer):
+            # 1. Write code to a temp file
+            with tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w") as tmp:
+                tmp.write(code)
+                tmp_path = tmp.name
+            
+            try:
+                # 2. Import it dynamically
+                spec = importlib.util.spec_from_file_location("test_plugin_mod", tmp_path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                
+                # 3. Find the Analyzer class
+                analyzer_cls = None
+                for attr_name in dir(module):
+                    attr = getattr(module, attr_name)
+                    if (inspect.isclass(attr) and 
+                        attr.__module__ == "test_plugin_mod" and 
+                        "BaseAnalyzer" in [base.__name__ for base in inspect.getmro(attr)]):
+                        analyzer_cls = attr
+                        break
+                
+                if not analyzer_cls:
+                    raise gr.Error("No BaseAnalyzer subclass found in the code.")
+                
+                # 4. Run it
+                analyzer_instance = analyzer_cls()
+                analyzer_instance.run(global_processor)
+                result_df = global_processor.last_result
+                
+                gr.Info(f"Plugin '{analyzer_instance.name}' tested successfully!")
+                return f"✅ Success: {analyzer_instance.name}", result_df, stdout_buffer.getvalue()
+            finally:
+                if os.path.exists(tmp_path): os.remove(tmp_path)
+    except Exception as e:
+        logger.error(f"Plugin test error: {e}")
+        return f"❌ Error: {e}", None, stdout_buffer.getvalue() + "\n" + traceback.format_exc()
+
+def create_new_plugin_template():
+    """Return a fresh plugin template."""
+    return PLUGIN_TEMPLATE, "new_analysis_module", "Template loaded."
 
 def create_ui():
     # DataGrip-inspired custom theme with grayscale palette
@@ -1900,14 +2002,18 @@ def create_ui():
                             # Sub-tab 1.2: Data Profiling
                             with gr.Tab("Data Profiling"):
                                 gr.Markdown("### Data Quality & Profiling")
-                                with gr.Row():
-                                    # @MX:NOTE: Defaults to False (follows Gradio theme)
-                                    # User can check to force dark charts even in light mode
-                                    profile_dark_toggle = gr.Checkbox(label="Dark Mode Charts", value=False)
-
+                                
                                 with gr.Row():
                                     with gr.Column(scale=2):
-                                        profile_plot = gr.Plot(label="Column Coverage (%)")
+                                        profile_plot = gr.BarPlot(
+                                            label="Column Coverage (%)",
+                                            x="column",
+                                            y="coverage_%",
+                                            title="Data Coverage per Column (%)",
+                                            y_lim=[0, 100],
+                                            color="coverage_%",
+                                            tooltip=["column", "coverage_%"]
+                                        )
                                     with gr.Column(scale=1):
                                         with gr.Accordion("📊 Column Details", open=False):
                                             profile_coverage_table = gr.Dataframe(label="Coverage Stats")
@@ -1983,7 +2089,7 @@ def create_ui():
                                 with gr.Accordion("🎨 Chart Configuration", open=True):
                                     with gr.Row():
                                         sql_chart_type = gr.Dropdown(
-                                            choices=["Bar", "Line", "Scatter", "Pie", "Histogram"],
+                                            choices=["Bar", "Line", "Scatter"],
                                             value="Bar",
                                             label="Chart Type"
                                         )
@@ -1996,13 +2102,123 @@ def create_ui():
 
                                     with gr.Row():
                                         sql_show_trend = gr.Checkbox(label="Show Trend Line (Scatter Only)", value=False)
-                                        sql_dark_toggle = gr.Checkbox(label="Dark Mode Charts", value=False)
 
-                                sql_chart_display = gr.Plot(label="SQL Chart")
+                                # Native Gradio Plots - Auto-theme sync
+                                sql_bar_display = gr.BarPlot(label="SQL Bar Chart", visible=True)
+                                sql_line_display = gr.LinePlot(label="SQL Line Chart", visible=False)
+                                sql_scatter_display = gr.ScatterPlot(label="SQL Scatter Chart", visible=False)
 
                     # -----------------------------
                     # TAB 3: Progress Monitoring
                     # -----------------------------
+                    
+                    # -----------------------------
+                    # TAB 3: Advanced Analytics
+                    # -----------------------------
+                    with gr.Tab("Advanced Analytics"):
+                        gr.Markdown("### Pre-built Analysis Modules")
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                analyzer_dropdown = gr.Dropdown(
+                                    choices=get_analyzer_choices(),
+                                    label="Select Analyzer",
+                                    info="Choose a specialized analysis module"
+                                )
+                                run_analysis_btn = gr.Button("🚀 Run Analysis", variant="primary")
+                            
+                            with gr.Column(scale=1):
+                                with gr.Accordion("⚙️ Analysis Options", open=False):
+                                    row_slider_ana = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows to Preview")
+                                    col_dropdown_ana = gr.Dropdown(choices=["5", "10", "20", "50", "All"], value="All", label="Columns")
+
+                        with gr.Tabs():
+                            with gr.Tab("📊 Analysis Results"):
+                                analysis_status = gr.Textbox(label="Status", interactive=False, visible=False)
+                                analysis_results = gr.Dataframe(
+                                    label="Result Data",
+                                    interactive=False,
+                                    wrap=True,
+                                    max_height=500
+                                )
+                                analysis_css_override = gr.HTML("")
+
+                            with gr.Tab("📈 Visualizer"):
+                                # Native plots for analysis
+                                ana_bar_display = gr.BarPlot(label="Analysis Bar Chart", visible=True)
+                                ana_line_display = gr.LinePlot(label="Analysis Line Chart", visible=False)
+                                ana_scatter_display = gr.ScatterPlot(label="Analysis Scatter Chart", visible=False)
+
+                    
+                    # -----------------------------
+                    # TAB 4: Report Builder
+                    # -----------------------------
+                    with gr.Tab("Report Builder"):
+                        gr.Markdown("### Multi-Section Analysis Report")
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                report_title = gr.Textbox(label="Report Title", value="DuckDB Analysis Report")
+                                report_author = gr.Textbox(label="Author Name", value="Analyst")
+                                
+                                with gr.Row():
+                                    report_section_heading = gr.Textbox(label="Section Heading", placeholder="e.g., Sales Summary")
+                                    report_section_type = gr.Dropdown(
+                                        choices=["Analyzer Results Table", "SQL Results Table", "Schema Info", "Text/Note"],
+                                        value="Analyzer Results Table",
+                                        label="Section Type"
+                                    )
+                                
+                                report_section_body = gr.Textbox(label="Text/Note Content (Optional)", lines=3, visible=False)
+                                
+                                def toggle_note_visibility(stype):
+                                    import gradio as gr
+                                    return gr.update(visible=(stype == "Text/Note"))
+                                
+                                report_section_type.change(toggle_note_visibility, [report_section_type], [report_section_body])
+                                
+                                with gr.Row():
+                                    add_section_btn = gr.Button("➕ Add Section", variant="secondary")
+                                    clear_report_btn = gr.Button("🗑️ Clear All", variant="stop")
+                                
+                            with gr.Column(scale=1):
+                                gr.Markdown("#### Report Structure")
+                                report_preview_list = gr.HTML(
+                                    value="<div class='report-section-list'>No sections added yet.</div>"
+                                )
+                                
+                        gr.Markdown("---")
+                        with gr.Row():
+                            gen_md_btn = gr.Button("📝 Generate Markdown", variant="primary")
+                            gen_pdf_btn = gr.Button("📕 Generate PDF", variant="primary")
+                        
+                        report_output_file = gr.File(label="Download Generated Report", visible=False)
+                        report_md_preview = gr.Markdown(visible=False)
+
+                    
+                    # -----------------------------
+                    # TAB 5: Plugin Studio
+                    # -----------------------------
+                    with gr.Tab("Plugin Studio"):
+                        gr.Markdown("### Dynamic Plugin Development")
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                plugin_editor = gr.Code(
+                                    label="Python Plugin Editor",
+                                    language="python",
+                                    lines=20,
+                                    value=PLUGIN_TEMPLATE
+                                )
+                                with gr.Row():
+                                    test_plugin_btn = gr.Button("🧪 Test Plugin (Dry Run)", variant="secondary")
+                                    new_plugin_btn = gr.Button("📄 New Template")
+                                
+                            with gr.Column(scale=1):
+                                gr.Markdown("#### Plugin Management")
+                                plugin_status = gr.Textbox(label="Status", interactive=False)
+                                plugin_logs = gr.Code(label="Console Output", language="python", lines=15)
+                                
+                        gr.Markdown("#### Test Results")
+                        plugin_results_table = gr.Dataframe(label="Plugin Results Table", visible=False)
+
                     with gr.Tab("Progress Monitoring"):
                         gr.Markdown("### Execution Status & Progress")
 
@@ -2036,208 +2252,21 @@ def create_ui():
                         )
 
         # ============================================================
-        # Event Handlers (wired inside Blocks context)
-        # ============================================================
-
-        # Debug logging wrapper
-        def log_event(event_name, *args, **kwargs):
-            """Log Gradio events for debugging."""
-            logger.debug(f"[EVENT] {event_name} called with {len(args)} args, {len(kwargs)} kwargs")
-            if args and args[0] is not None:
-                try:
-                    logger.debug(f"[EVENT] {event_name} first arg type: {type(args[0])}, value: {str(args[0])[:100]}")
-                except:
-                    logger.debug(f"[EVENT] {event_name} first arg: {args[0]}")
-
-        # File upload handler - log and prepare file for loading
-        def handle_file_upload(file_obj):
-            """Handle file upload with debug logging."""
-            log_event("file_upload", file_obj)
-            if file_obj is None:
-                logger.warning("[FILE_UPLOAD] No file received (None)")
-                return gr.update(), "⚠️ No file selected. Please upload a CSV file."
-            logger.info(f"[FILE_UPLOAD] File uploaded: {file_obj}")
-            return gr.update(), f"✅ File '{file_obj.name if hasattr(file_obj, 'name') else file_obj}' ready. Click 'Load Data' to process."
-
-        # Load button click handler - loads the data
-        def handle_load_click(file_obj, header, kv, table_mapping_input):
-            """Handle Load Data button click with debug logging."""
-            log_event("load_click", file_obj, header, kv)
-            logger.info(f"[LOAD_BTN] Loading: file={file_obj}, header={header}, kv={kv}")
-
-            result = load_data(file_obj, header, kv, table_mapping=table_mapping_input, is_dark=False)
-            logger.info(f"[LOAD_BTN] Result: type={type(result)}, len={len(result) if hasattr(result, '__len__') else 'N/A'}")
-
-            # Unpack the 10-element tuple from load_data
-            if len(result) == 10:
-                info_msg, preview_df, schema_str, health_fig, health_df, profile_df, progress_update, stats_update, table_dropdown_update, new_state = result
-                logger.info(f"[LOAD_BTN] Info: {info_msg[:50] if info_msg else 'None'}...")
-                return (
-                    info_msg,           # info_box
-                    preview_df,         # preview_table
-                    schema_str,         # schema_sidebar
-                    health_fig,         # profile_plot
-                    health_df,          # profile_coverage_table
-                    profile_df,         # profile_summary_table
-                    progress_update,    # progress_box
-                    stats_update,       # exec_stats
-                    table_dropdown_update, # table_dropdown
-                    new_state           # app_state
-                )
-            else:
-                logger.error(f"[LOAD_BTN] Unexpected result length: {len(result)}")
-                # Add missing updates if needed
-                while isinstance(result, tuple) and len(result) < 10:
-                    result = result + (gr.update(),)
-                if not isinstance(result, tuple):
-                    result = (gr.update(),) * 10
-                return result
-
-        def handle_table_switch(table_name, current_state, is_dark=False):
-            if not global_processor or not table_name:
-                return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
-            
-            try:
-                global_processor.set_active_table(table_name)
-                info = global_processor.info()
-                info_str = f"Rows: {info.get('rows', '?')}, Cols: {len(info.get('columns', []))}"
-                stats_text = get_execution_stats()
-                
-                preview_df = global_processor.preview(20)
-                schema_str = get_schema_info()
-                health_fig, health_df, profile_df = get_data_profiling(is_dark=is_dark)
-                
-                # Update state
-                if isinstance(current_state, dict):
-                    current_state["active_table"] = table_name
-
-                return (
-                    f"✅ Switched to Table: {table_name}\n\n{info_str}",
-                    preview_df,
-                    schema_str,
-                    health_fig,
-                    health_df,
-                    profile_df,
-                    gr.update(value=info_str),
-                    current_state
-                )
-            except Exception as e:
-                logger.error(f"Error switching table: {e}")
-                return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
-
-        # Wire up event handlers
-        logger.info("[EVENT_SETUP] Wiring up Gradio event handlers...")
-
-        # Survival restoration on load (theme switch / refresh)
-        app.load(
-            fn=restore_session,
-            inputs=[app_state, profile_dark_toggle, sql_dark_toggle],
-            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, exec_stats, table_dropdown, app_state, file_input, header_check, kv_check, table_mapping_input, sql_input]
-        )
-        logger.info("[EVENT_SETUP] ✓ app.load → restore_session")
-
-        # File upload → update info box
-        file_input.upload(
-            fn=handle_file_upload,
-            inputs=[file_input],
-            outputs=[file_input, info_box]
-        )
-        logger.info("[EVENT_SETUP] ✓ file_input.upload → handle_file_upload")
-
-        # Load button → load data
-        load_btn.click(
-            fn=handle_load_click,
-            inputs=[file_input, header_check, kv_check, table_mapping_input],
-            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, exec_stats, table_dropdown, app_state],
-            api_name="load_data"
-        )
-        logger.info("[EVENT_SETUP] ✓ load_btn.click → handle_load_click")
-        
-        table_dropdown.change(
-            fn=handle_table_switch,
-            inputs=[table_dropdown, app_state, profile_dark_toggle],
-            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, app_state],
-            api_name="switch_table"
-        )
-
-        logger.info("[EVENT_SETUP] All event handlers wired successfully.")
-
-        # ============================================================
-        # Dark Mode Toggle Handlers
-        # ============================================================
-
-        # Data Inspection tab - dark mode toggle
-        def handle_profile_dark_toggle(is_dark):
-            """Regenerate profiling charts with dark/light mode."""
-            log_event("profile_dark_toggle", is_dark)
-            logger.info(f"[DARK_MODE] Profile charts: dark={is_dark}")
-
-            if global_processor is None:
-                logger.warning("[DARK_MODE] No data loaded, skipping chart regeneration")
-                return gr.update(), gr.update(), gr.update()
-
-            try:
-                health_fig, health_df, profile_df = get_data_profiling(is_dark=is_dark)
-                logger.info(f"[DARK_MODE] Regenerated profiling charts with dark={is_dark}")
-                return (
-                    gr.update(value=health_fig),  # profile_plot
-                    gr.update(value=health_df),   # profile_coverage_table
-                    gr.update(value=profile_df),  # profile_summary_table
-                )
-            except Exception as e:
-                logger.error(f"[DARK_MODE] Failed to regenerate charts: {e}")
-                return gr.update(), gr.update(), gr.update()
-
-        # Query Editor tab - dark mode toggle for SQL charts
-        def handle_sql_dark_toggle(is_dark, current_chart, df):
-            """Regenerate SQL chart with dark/light mode."""
-            log_event("sql_dark_toggle", is_dark, current_chart)
-            logger.info(f"[DARK_MODE] SQL chart: dark={is_dark}")
-
-            if df is None or df.empty:
-                logger.warning("[DARK_MODE] No data to regenerate chart")
-                return gr.update()
-
-            try:
-                # Regenerate the auto-chart with the correct dark mode setting
-                logger.info(f"[DARK_MODE] Regenerating SQL chart with dark={is_dark}")
-                new_chart = generate_auto_chart(df, is_dark=is_dark)
-                return gr.update(value=new_chart)
-            except Exception as e:
-                logger.error(f"[DARK_MODE] Failed to regenerate SQL chart: {e}")
-                return gr.update()
-
-        # Wire up dark mode toggle handlers
-        profile_dark_toggle.change(
-            fn=handle_profile_dark_toggle,
-            inputs=[profile_dark_toggle],
-            outputs=[profile_plot, profile_coverage_table, profile_summary_table]
-        )
-        logger.info("[EVENT_SETUP] ✓ profile_dark_toggle.change → handle_profile_dark_toggle")
-
-        sql_dark_toggle.change(
-            fn=handle_sql_dark_toggle,
-            inputs=[sql_dark_toggle, sql_chart_display, sql_state],
-            outputs=[sql_chart_display]
-        )
-        logger.info("[EVENT_SETUP] ✓ sql_dark_toggle.change → handle_sql_dark_toggle")
-
-        # ============================================================
         # SQL Query Button Handlers
         # ============================================================
 
         # Run SQL button handler
-        def handle_run_sql(query, max_rows, max_cols, is_dark, current_state):
+        def handle_run_sql(query, max_rows, max_cols, current_state):
             """Handle Run Query button click."""
-            log_event("run_sql", query, max_rows, max_cols, is_dark)
-            logger.info(f"[SQL_BTN] Running query: {query[:100] if query else 'None'}..., dark mode={is_dark}")
+            log_event("run_sql", query, max_rows, max_cols)
+            logger.info(f"[SQL_BTN] Running query: {query[:100] if query else 'None'}...")
             
             # Update state with the query
             if isinstance(current_state, dict):
                 current_state["sql_query"] = query
                 
-            res = execute_sql(query, max_rows, max_cols, is_dark=is_dark)
-            # res is a tuple of 11 elements, we append current_state
+            res = execute_sql(query, max_rows, max_cols)
+            # res is a tuple of 12 elements, we append current_state
             return res + (current_state,)
 
         # Format/Prettify SQL button handler
@@ -2257,12 +2286,14 @@ def create_ui():
         # Wire up SQL button handlers
         run_sql_btn.click(
             fn=handle_run_sql,
-            inputs=[sql_input, row_slider_sql, col_dropdown_sql, sql_dark_toggle, app_state],
+            inputs=[sql_input, row_slider_sql, col_dropdown_sql, app_state],
             outputs=[
                 sql_results,          # Results dataframe
                 sql_css_override,     # CSS for table styling
                 sql_history_dropdown, # Update history
-                sql_chart_display,    # Auto-generated chart
+                sql_bar_display,      # Native Bar Plot
+                sql_line_display,     # Native Line Plot
+                sql_scatter_display,  # Native Scatter Plot
                 sql_state,            # Store dataframe for charting
                 sql_x_axis,           # Update chart controls
                 sql_y_axis,           # Update chart controls
@@ -2356,55 +2387,78 @@ def create_ui():
         logger.info("[EVENT_SETUP] ✓ sql_export_xlsx_btn.click → handle_export_xlsx")
 
         # Manual chart controls - regenerate chart when parameters change
-        def handle_manual_chart_params(chart_type, x_col, y_col, color_col, facet_col, show_trend, is_dark, df):
+        def handle_manual_chart_params(chart_type, x_col, y_col, color_col, facet_col, show_trend, df):
             """Handle manual chart parameter changes."""
-            if df is None:
-                return gr.update()
-            return render_manual_chart(df, chart_type, x_col, y_col, color_col, facet_col, show_trend, is_dark=is_dark)
+            return get_chart_updates(df, chart_type, x_col, y_col, color_col, facet_col, show_trend)
 
         # Wire up manual chart controls
-        sql_chart_type.change(
-            fn=handle_manual_chart_params,
-            inputs=[sql_chart_type, sql_x_axis, sql_y_axis, sql_color_by, sql_facet_by, sql_show_trend, sql_dark_toggle, sql_state],
-            outputs=[sql_chart_display]
-        )
-        logger.info("[EVENT_SETUP] ✓ sql_chart_type.change → handle_manual_chart_params")
+        chart_inputs = [sql_chart_type, sql_x_axis, sql_y_axis, sql_color_by, sql_facet_by, sql_show_trend, sql_state]
+        chart_outputs = [sql_bar_display, sql_line_display, sql_scatter_display]
 
-        # Also update when axis selections change
-        sql_x_axis.change(
-            fn=handle_manual_chart_params,
-            inputs=[sql_chart_type, sql_x_axis, sql_y_axis, sql_color_by, sql_facet_by, sql_show_trend, sql_dark_toggle, sql_state],
-            outputs=[sql_chart_display]
-        )
-        logger.info("[EVENT_SETUP] ✓ sql_x_axis.change → handle_manual_chart_params")
+        sql_chart_type.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
+        sql_x_axis.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
+        sql_y_axis.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
+        sql_color_by.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
+        sql_facet_by.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
+        sql_show_trend.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
 
-        sql_y_axis.change(
-            fn=handle_manual_chart_params,
-            inputs=[sql_chart_type, sql_x_axis, sql_y_axis, sql_color_by, sql_facet_by, sql_show_trend, sql_dark_toggle, sql_state],
-            outputs=[sql_chart_display]
+        
+        # Analyzer Button Handler
+        run_analysis_btn.click(
+            fn=run_analysis,
+            inputs=[analyzer_dropdown, row_slider_ana, col_dropdown_ana],
+            outputs=[
+                analysis_status,
+                analysis_results,
+                analysis_css_override,
+                ana_bar_display,
+                ana_line_display,
+                ana_scatter_display,
+                analysis_state,
+                sql_x_axis,
+                sql_y_axis,
+                sql_color_by,
+                sql_facet_by
+            ]
         )
-        logger.info("[EVENT_SETUP] ✓ sql_y_axis.change → handle_manual_chart_params")
 
-        sql_color_by.change(
-            fn=handle_manual_chart_params,
-            inputs=[sql_chart_type, sql_x_axis, sql_y_axis, sql_color_by, sql_facet_by, sql_show_trend, sql_dark_toggle, sql_state],
-            outputs=[sql_chart_display]
+        # Report Builder Handlers
+        add_section_btn.click(
+            fn=add_report_section,
+            inputs=[report_sections_state, report_section_type, report_section_heading, report_section_body],
+            outputs=[report_sections_state, progress_box]
+        ).then(
+            fn=render_sections_view,
+            inputs=[report_sections_state],
+            outputs=[report_preview_list]
         )
-        logger.info("[EVENT_SETUP] ✓ sql_color_by.change → handle_manual_chart_params")
 
-        sql_facet_by.change(
-            fn=handle_manual_chart_params,
-            inputs=[sql_chart_type, sql_x_axis, sql_y_axis, sql_color_by, sql_facet_by, sql_show_trend, sql_dark_toggle, sql_state],
-            outputs=[sql_chart_display]
+        clear_report_btn.click(
+            fn=clear_report_sections,
+            outputs=[report_sections_state, progress_box]
+        ).then(
+            fn=render_sections_view,
+            inputs=[report_sections_state],
+            outputs=[report_preview_list]
         )
-        logger.info("[EVENT_SETUP] ✓ sql_facet_by.change → handle_manual_chart_params")
 
-        sql_show_trend.change(
-            fn=handle_manual_chart_params,
-            inputs=[sql_chart_type, sql_x_axis, sql_y_axis, sql_color_by, sql_facet_by, sql_show_trend, sql_dark_toggle, sql_state],
-            outputs=[sql_chart_display]
+        gen_md_btn.click(
+            fn=lambda t, a, s: generate_report_markdown(t, a, s),
+            inputs=[report_title, report_author, report_sections_state],
+            outputs=[report_output_file]
+        ).then(lambda p: gr.update(visible=True, value=p), inputs=[report_output_file], outputs=[report_output_file])
+
+        # Plugin Studio Handlers
+        test_plugin_btn.click(
+            fn=test_analyzer_plugin,
+            inputs=[plugin_editor],
+            outputs=[plugin_status, plugin_results_table, plugin_logs]
+        ).then(lambda df: gr.update(visible=df is not None), inputs=[plugin_results_table], outputs=[plugin_results_table])
+
+        new_plugin_btn.click(
+            fn=create_new_plugin_template,
+            outputs=[plugin_editor, save_pattern_name, plugin_status]
         )
-        logger.info("[EVENT_SETUP] ✓ sql_show_trend.change → handle_manual_chart_params")
 
         logger.info("[EVENT_SETUP] All event handlers wired successfully.")
 
