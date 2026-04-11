@@ -754,12 +754,25 @@ def generate_report_pdf(title, author, sections):
     
     # Unicode support for Mac: Try to find a font that supports Korean/Special characters
     # We do a preliminary check to initialize the PDF class with the right font for header/footer
-    unicode_font_path = "/Library/Fonts/Arial Unicode.ttf"
     font_name = "helvetica"
     has_unicode = False
     
+    # Platform-specific font paths for Unicode support
+    if sys.platform == "darwin":  # macOS
+        unicode_font_path = "/Library/Fonts/Arial Unicode.ttf"
+    elif sys.platform == "win32":  # Windows
+        # Common Unicode font on Windows. Arial Unicode MS is often available.
+        # It's better to bundle a font or allow configuration for broader compatibility.
+        # For now, we'll try a common system font.
+        unicode_font_path = os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "arialuni.ttf")
+    else:  # Linux and other Unix-like systems
+        # Attempt to find a common font, or let it fall back
+        # For broader compatibility, consider shipping a font like Noto Sans CJK
+        # or providing a configuration option for the user.
+        unicode_font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf" # A common Linux font
+
     if os.path.exists(unicode_font_path):
-        font_name = "ArialUnicode"
+        font_name = "ArialUnicode" # FPDF will register this name
         has_unicode = True
         
     pdf = PDF(font_name=font_name)
