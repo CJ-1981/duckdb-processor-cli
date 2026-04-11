@@ -14,17 +14,32 @@ import sys
 import logging
 import traceback
 import datetime
+import atexit
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 
 # Set up detailed logging for debugging file loading issues
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO, # Reduced from DEBUG for production feel
     format='%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
 )
 logger = logging.getLogger(__name__)
 logger.info("=== DuckDB Processor CLI Starting ===")
-logger.info("Debug logging enabled. All events will be logged.")
+
+# Create a dedicated temp directory for the session
+TEMP_DIR = os.path.join(tempfile.gettempdir(), "duckdb_processor_temp")
+os.makedirs(TEMP_DIR, exist_ok=True)
+
+def cleanup_temp():
+    """Remove temp files on exit."""
+    if os.path.exists(TEMP_DIR):
+        try:
+            shutil.rmtree(TEMP_DIR)
+            logger.info("Cleaned up temporary export directory.")
+        except Exception as e:
+            logger.error(f"Failed to cleanup temp dir: {e}")
+
+atexit.register(cleanup_temp)
 
 from duckdb_processor.loader import load
 from duckdb_processor.config import ProcessorConfig
@@ -134,17 +149,20 @@ def save_new_pattern(name, query):
     """Save a new SQL pattern to file and update dropdown."""
     global SQL_PATTERNS
     if not name or not query or not query.strip():
-        return "⚠️ Name and Query cannot be empty.", gr.update()
-    
+        raise gr.Error("Name and Query cannot be empty.")
+
     SQL_PATTERNS[name] = query
     try:
         # Save only what's changed/added
-        with open(PATTERNS_FILE, "w") as f:
+        with open(resolve_asset_path(PATTERNS_FILE), "w") as f:
             json.dump(SQL_PATTERNS, f, indent=2)
+
         choices = list(SQL_PATTERNS.keys())
-        return f"✅ Pattern '{name}' saved successfully!", gr.update(choices=choices)
+        gr.Info(f"Pattern '{name}' saved successfully!")
+        return gr.update(choices=choices)
     except Exception as e:
-        return f"❌ Error saving pattern: {e}", gr.update()
+        logger.error(f"Error saving pattern: {e}")
+        raise gr.Error(f"Error saving pattern: {e}")
 
 # Initial pattern load
 load_patterns()
@@ -234,15 +252,16 @@ def export_results(format, df=None):
     global global_processor
     # Use the provided DF or fallback to processor's last result
     data = df if df is not None else (global_processor.last_result if global_processor else None)
-    
+
     if data is None or data.empty:
         logger.warning("Export attempted with no data.")
-        return None
-    
+        raise gr.Error("No data available to export.")
+
     try:
-        filename = f"duck_export_{format}.{format}"
-        path = os.path.abspath(filename)
-        
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"duck_export_{timestamp}.{format}"
+        path = os.path.join(TEMP_DIR, filename)
+
         if format == "csv":
             data.to_csv(path, index=False)
         elif format == "json":
@@ -253,13 +272,13 @@ def export_results(format, df=None):
             data.to_excel(path, index=False, engine='openpyxl')
         else:
             return None
-            
+
         logger.info(f"Export successful: {path}")
+        gr.Info(f"Exported to {format.upper()} successfully.")
         return path
     except Exception as e:
         logger.error(f"Export error: {e}")
-        return None
-
+        raise gr.Error(f"Export failed: {e}")
 def generate_auto_chart(df, is_dark=False):
     """Attempt to generate a relevant chart from a dataframe."""
     if df is None or df.empty:
@@ -428,12 +447,12 @@ def refresh_profiling(is_dark):
     fig, df_cov, df_sum = get_data_profiling(is_dark=is_dark)
     return fig
 
-def load_data(file_objs, header, kv, table_mapping="", is_dark=False):
+def load_data(file_objs, header, kv, table_mapping="", is_dark=False, progress=gr.Progress()):
     """Load the CSV into DuckDB via Processor API and return preview."""
     global global_processor, execution_stats
     
     if not file_objs:
-        return "⚠️ No file provided.", None, "No data.", None, None, None, gr.update(), gr.update(), gr.update(visible=False)
+        raise gr.Error("No file provided. Please upload at least one CSV file.")
 
     # Handle single file or list
     if not isinstance(file_objs, list):
@@ -453,6 +472,19 @@ def load_data(file_objs, header, kv, table_mapping="", is_dark=False):
     logger.info(f"Loading data: files={file_paths}, header={header}, kv={kv}")
 
     try:
+        progress(0.1, desc="Initializing DuckDB...")
+        
+        # Phase 1: Memory Management - Explicit Cleanup
+        if global_processor is not None:
+            try:
+                tables = global_processor.get_tables()
+                for t in tables:
+                    global_processor.con.execute(f'DROP TABLE IF EXISTS "{t}"')
+                global_processor.con.execute("PRAGMA shrink_memory;")
+                logger.info("Cleared previous session memory.")
+            except Exception as e:
+                logger.warning(f"Cleanup failed: {e}")
+
         # Reset execution statistics when loading new data
         execution_stats = {
             "rows_processed": 0,
@@ -461,12 +493,18 @@ def load_data(file_objs, header, kv, table_mapping="", is_dark=False):
         }
 
         # Pass file path to config
+        progress(0.3, desc="Parsing and loading CSV files...")
         config = ProcessorConfig(files=file_paths, header=header, kv=kv)
         global_processor = load(config)
+
+        # Hardware Optimization Pragmas
+        global_processor.con.execute("PRAGMA memory_limit='4GB';")
+        global_processor.con.execute("PRAGMA threads=4;")
 
         # Save session info for auto-recovery
         save_session_to_disk(file_paths[0] if file_paths else None, header, kv)
 
+        progress(0.6, desc="Calculating data info and schemas...")
         info = global_processor.info()
         info_str = f"Rows: {info.get('rows', '?')}, Cols: {len(info.get('columns', []))}"
         stats_text = get_execution_stats()
@@ -474,20 +512,21 @@ def load_data(file_objs, header, kv, table_mapping="", is_dark=False):
         # Only fetch 20 rows for preview to avoid large white space
         preview_df = global_processor.preview(20)
         schema_str = get_schema_info()
+        
+        progress(0.8, desc="Generating data quality profiling...")
         health_fig, health_df, profile_df = get_data_profiling(is_dark=is_dark)
 
         tables = global_processor.get_tables()
         table_dropdown_update = gr.update(choices=tables, value=global_processor.table, visible=True)
 
         logger.info("Data loaded successfully.")
+        gr.Info(f"Successfully loaded {len(tables)} table(s).")
         
         # Prepare state for BrowserState persistence
-        # We store the raw file paths (without mapping suffixes) to avoid duplication on recovery
         raw_paths = []
         for f in file_objs:
             p = f if isinstance(f, str) else (f.name if hasattr(f, 'name') else None)
             if p:
-                # If it already has a colon mapping, strip it for storage
                 if ":" in p and not os.path.exists(p):
                     p = p.rsplit(":", 1)[0]
                 raw_paths.append(p)
@@ -501,7 +540,7 @@ def load_data(file_objs, header, kv, table_mapping="", is_dark=False):
         }
 
         return (
-            f"✅ Data Loaded Successfully\n\n{info_str}\n\n💡 Theme switching is now protected! Your data will persist.",
+            f"✅ Data Loaded Successfully\n\n{info_str}\n\n💡 Performance optimized for local PC.",
             preview_df,
             schema_str,
             health_fig,
@@ -513,32 +552,35 @@ def load_data(file_objs, header, kv, table_mapping="", is_dark=False):
             new_state # BrowserState
         )
     except Exception as e:
-        error_msg = f"❌ Error loading data: {e}"
+        error_msg = f"Error loading data: {e}"
         logger.error(f"{error_msg}\n{traceback.format_exc()}")
-        return error_msg, None, "Error", None, None, None, gr.update(), gr.update(), gr.update(visible=False), gr.update()
+        raise gr.Error(error_msg)
 
-def run_analysis(analyzer_name, max_rows, max_cols, is_dark=False):
+def run_analysis(analyzer_name, max_rows, max_cols, is_dark=False, progress=gr.Progress()):
     """Run the selected analyzer against the loaded processor."""
     global global_processor
     logger.info(f"Running analysis: {analyzer_name}, max_rows={max_rows}, max_cols={max_cols}")
     if global_processor is None:
-        return "❌ Error: Please load data first (go to Data Preview tab).", gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+        raise gr.Error("No data loaded. Please upload a file first.")
     
     if not analyzer_name:
-        return "⚠️ Please select an analyzer from the dropdown.", gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+        gr.Warning("Please select an analyzer.")
+        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
     
     try:
+        progress(0.2, desc=f"Loading analyzer {analyzer_name}...")
         analyzer = get_analyzer(analyzer_name)
+        
+        progress(0.4, desc="Executing analysis logic...")
         analyzer.run(global_processor)
         
         df = global_processor.last_result
         if df is None or df.empty:
-            return f"✅ Analyzer '{analyzer_name}' ran successfully, but returned no results.", gr.update(), gr.update(), None, None, gr.update(), gr.update(), gr.update(), gr.update()
+            gr.Info(f"Analyzer '{analyzer_name}' ran successfully, but returned no results.")
+            return f"✅ Analyzer '{analyzer_name}' ran successfully!", gr.update(), gr.update(), None, None, gr.update(), gr.update(), gr.update(), gr.update()
             
-        # Calculate dynamic height
+        progress(0.7, desc="Formatting and charting...")
         height_px = int(max_rows) * 35 + 80
-        
-        # Instead of hiding columns, we force min-width via CSS to control visual "width"
         col_width = 150 if max_cols == "All" else (1500 // int(max_cols))
         style_injection = f"<style>#analysis-results td, #analysis-results th {{ min-width: {col_width}px !important; }}</style>"
         
@@ -546,8 +588,9 @@ def run_analysis(analyzer_name, max_rows, max_cols, is_dark=False):
         cols = df.columns.tolist()
         choices_with_none = [None] + cols
         
+        progress(1.0, desc="Done!")
         return (
-            f"✅ Analyzer '{analyzer_name}' ran successfully!", 
+            f"✅ Analyzer '{analyzer_name}' completed!", 
             gr.update(value=df, max_height=height_px), 
             style_injection, 
             chart_fig,
@@ -558,31 +601,27 @@ def run_analysis(analyzer_name, max_rows, max_cols, is_dark=False):
             gr.update(choices=choices_with_none, value=None)  # Facet By
         )
     except Exception as e:
-        error_msg = f"❌ Error running analyzer: {e}"
+        error_msg = f"Analysis Failed: {e}"
         logger.error(error_msg)
-        return (
-            error_msg, gr.update(), gr.update(), gr.update(), gr.update(), 
-            gr.update(), gr.update(), gr.update(), gr.update()
-        )
+        raise gr.Error(error_msg)
 
-def execute_sql(query, max_rows, max_cols, is_dark=False):
+def execute_sql(query, max_rows, max_cols, is_dark=False, progress=gr.Progress()):
     """Run arbitrary SQL from the SQL Editor."""
     global global_processor, execution_stats
     logger.info(f"Executing SQL query, max_rows={max_rows}, max_cols={max_cols}")
     if global_processor is None:
-        return "❌ Error: Please load data first (go to Data Preview tab).", gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+        raise gr.Error("No data loaded. Please upload a file first.")
 
     if not query or not query.strip():
-        return "⚠️ Query is empty.", gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+        gr.Warning("SQL query is empty.")
+        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
 
-    # Auto-fix: DuckDB 1.x has a known parser bug where backticks with multi-byte or
-    # even some ASCII chars trigger a '__postfix' scalar function error.
-    # Standard SQL uses double quotes for identifiers, so we auto-convert backticks.
+    # Auto-fix: DuckDB 1.x backtick handling
     if "`" in query:
-        logger.info("Auto-converting backticks to double quotes for DuckDB compatibility.")
         query = query.replace("`", '"')
 
     try:
+        progress(0.2, desc="Executing DuckDB query...")
         df = global_processor.sql(query)
         total_rows = len(df)
 
@@ -590,6 +629,7 @@ def execute_sql(query, max_rows, max_cols, is_dark=False):
         execution_stats['queries_executed'] += 1
         execution_stats['rows_processed'] += total_rows
 
+        progress(0.5, desc="Formatting results...")
         height_px = int(max_rows) * 35 + 80
         col_width = 150 if max_cols == "All" else (1500 // int(max_cols))
         style_injection = f"<style>#sql-results td, #sql-results th {{ min-width: {col_width}px !important; }}</style>"
@@ -599,13 +639,15 @@ def execute_sql(query, max_rows, max_cols, is_dark=False):
             query_history.insert(0, query)
             if len(query_history) > 20: query_history.pop()
 
+        progress(0.7, desc="Generating auto-chart...")
         chart_fig = generate_auto_chart(df, is_dark=is_dark)
         cols = df.columns.tolist()
         choices_with_none = [None] + cols
         stats_text = get_execution_stats()
 
+        progress(1.0, desc="Done!")
+        gr.Info(f"Query executed successfully! Returned {total_rows} total rows.")
         return (
-            f"✅ Query executed successfully! Returned {total_rows} total rows.",
             gr.update(value=df, max_height=height_px),
             style_injection,
             gr.update(choices=query_history),
@@ -619,21 +661,14 @@ def execute_sql(query, max_rows, max_cols, is_dark=False):
         )
     except Exception as e:
         err_str = str(e)
-        error_msg = f"❌ Error executing SQL: {err_str}"
-
-        # Update error count
         execution_stats['errors'] += 1
-        stats_text = get_execution_stats()
-
-        # Check for specific DuckDB backtick bug ('__postfix' error)
+        
+        error_msg = f"SQL Execution Failed: {err_str}"
         if "__postfix" in err_str and "`" in query:
-            error_msg += "\n\n💡 Tip: DuckDB's parser often misinterprets MySQL-style backticks (`) as postfix operators. Try using standard double quotes (\") for column names instead!"
-
+            error_msg += "\n\n💡 Tip: Use double quotes (\") instead of backticks (`) for column names."
+        
         logger.error(error_msg)
-        return (
-            error_msg, gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-            gr.update(), gr.update(), gr.update(), gr.update(), gr.update(value=stats_text)
-        )
+        raise gr.Error(error_msg)
 
 def update_sql_from_selection(pattern_name):
     """Update SQL input from pattern library."""
@@ -1764,391 +1799,55 @@ def create_ui():
             'save_pattern_btn': { key: 's', ctrl: true, shift: true, alt: false, shortcut_text: 'Ctrl+Shift+S' }
         };
 
-        // === Utility Functions ===
-
-        // Find and click button by id (Gradio sets elem_id as the HTML id)
-        function clickButton(elemId) {
-            const btn = document.getElementById(elemId);
-            if (btn) {
-                btn.click();
-                return true;
-            }
-
-            // Fallback: try elem_id attribute (for older Gradio versions)
-            const fallback = document.querySelector(`[elem_id="${elemId}"]`);
-            if (fallback) {
-                fallback.click();
-                return true;
-            }
-
-            return false;
-        }
-
-        // === Global Keyboard Event Listener ===
-        document.addEventListener('keydown', function(event) {
-            // Ignore if user is typing in an input field (unless it's a special command)
-            const target = event.target;
-            const tagName = target.tagName.toLowerCase();
-            const isInput = (tagName === 'input' || tagName === 'textarea' || target.isContentEditable);
-
-            // Allow Ctrl+Enter in textareas (submit query)
-            if (isInput && event.ctrlKey && event.key === 'Enter') {
-                // Let the default behavior happen for SQL editor
-                return;
-            }
-
-            // Block all other shortcuts when typing
-            if (isInput) {
-                return;
-            }
-
-            // Find matching shortcut
-            for (const [elemId, shortcut] of Object.entries(SHORTCUTS)) {
-                if (
-                    event.key.toLowerCase() === shortcut.key.toLowerCase() &&
-                    event.ctrlKey === shortcut.ctrl &&
-                    event.shiftKey === shortcut.shift &&
-                    event.altKey === shortcut.alt
-                ) {
-                    event.preventDefault();
-                    clickButton(elemId);
-                    return;
-                }
-            }
-        });
-
-        // === Shortcut Badge Injection ===
         function injectShortcutBadges() {
-            const shortcuts = {
-                'load_btn': 'Ctrl+L',
-                'run_sql_btn': 'Ctrl+Enter',
-                'format_btn': 'Ctrl+S',
-                'save_pattern_btn': 'Ctrl+Shift+S'
-            };
-
-            for (const [elemId, text] of Object.entries(shortcuts)) {
-                // Find buttons by id attribute (Gradio sets elem_id as the HTML id)
-                const btn = document.getElementById(elemId);
-
-                if (!btn) {
-                    // Silently skip - button might not be rendered yet (e.g., in unopened tab)
-                    continue;
+            Object.keys(SHORTCUTS).forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn && !btn.querySelector('.keyboard-shortcut-badge')) {
+                    const text = SHORTCUTS[id].shortcut_text;
+                    const badge = document.createElement('kbd');
+                    badge.className = 'keyboard-shortcut-badge';
+                    badge.textContent = text;
+                    badge.style.cssText = `
+                        margin-left: 8px;
+                        padding: 2px 6px;
+                        font-size: 11px;
+                        font-family: 'JetBrains Mono', monospace;
+                        background: #3C3C3C;
+                        border: 1px solid #5C5C5C;
+                        border-radius: 3px;
+                        color: #E8E8E8;
+                        font-weight: 500;
+                    `;
+                    btn.appendChild(badge);
                 }
-
-                // Check if badge already exists
-                if (btn.querySelector('.keyboard-shortcut-badge')) {
-                    continue;
-                }
-
-                // Create badge element
-                const badge = document.createElement('kbd');
-                badge.className = 'keyboard-shortcut-badge';
-                badge.textContent = text;
-                badge.style.cssText = `
-                    margin-left: 8px;
-                    padding: 2px 6px;
-                    font-size: 11px;
-                    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
-                    background: #3C3C3C;
-                    border: 1px solid #5C5C5C;
-                    border-radius: 3px;
-                    color: #E8E8E8;
-                    font-weight: 500;
-                `;
-
-                // Append badge to button
-                btn.appendChild(badge);
-            }
+            });
         }
 
-        // Initialize shortcut badges on page load
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', injectShortcutBadges);
-        } else {
-            injectShortcutBadges();
-        }
+        setInterval(injectShortcutBadges, 1000);
 
-        // Re-inject badges when Gradio updates the DOM (for dynamic content)
-        // Use debounce to avoid excessive calls
-        let badgeTimeout;
-        const observer = new MutationObserver(function(mutations) {
-            clearTimeout(badgeTimeout);
-            badgeTimeout = setTimeout(injectShortcutBadges, 100);
-        });
+        window.addEventListener('keydown', function(e) {
+            const target = e.target;
+            const isInput = (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+            if (isInput && e.ctrlKey && e.key === 'Enter') return;
+            if (isInput) return;
 
-        // Start observing immediately
-        const mainContainer = document.querySelector('.gradio-container');
-        if (mainContainer) {
-            observer.observe(mainContainer, {childList: true, subtree: true});
-        } else {
-            // If container doesn't exist yet, wait for it
-            const containerCheck = setInterval(function() {
-                const container = document.querySelector('.gradio-container');
-                if (container) {
-                    clearInterval(containerCheck);
-                    observer.observe(container, {childList: true, subtree: true});
-                    injectShortcutBadges();
-                }
-            }, 100);
-        }
-
-        // === Theme Switch Confirmation ===
-        (function() {
-            console.log('[THEME PROTECTION] Script loaded');
-            console.log('[THEME PROTECTION] Page theme:', document.body.classList.contains('dark') ? 'dark' : 'light');
-
-            // Add visible indicator that protection is active
-            setTimeout(function() {
-                const indicator = document.createElement('div');
-                indicator.id = 'theme-protection-indicator';
-                indicator.style.cssText = `
-                    position: fixed;
-                    bottom: 10px;
-                    right: 10px;
-                    padding: 6px 12px;
-                    background: rgba(74, 144, 226, 0.9);
-                    color: white;
-                    border-radius: 4px;
-                    font-size: 11px;
-                    font-family: sans-serif;
-                    z-index: 9998;
-                    pointer-events: none;
-                    opacity: 0;
-                    transition: opacity 0.3s;
-                `;
-                indicator.textContent = '🛡️ Theme Protection Active';
-                document.body.appendChild(indicator);
-
-                // Show briefly to indicate it's loaded
-                setTimeout(() => { indicator.style.opacity = '1'; }, 100);
-                setTimeout(() => { indicator.style.opacity = '0'; }, 3000);
-            }, 1000);
-
-            let hasData = false;
-
-            // Check if data is loaded
-            function checkForData() {
-                // Check info box for success
-                const infoBox = document.querySelector('#info_box textarea, [label="Data Info & Status"] textarea');
-                if (infoBox && infoBox.value) {
-                    if (infoBox.value.includes('✅') || infoBox.value.includes('Data loaded') ||
-                        infoBox.value.includes('rows') || infoBox.value.includes('2120')) {
-                        console.log('[THEME PROTECTION] Data detected in info box');
-                        return true;
-                    }
-                }
-
-                // Check preview table
-                const previewTable = document.querySelector('[label="Table Data"] table tbody');
-                if (previewTable) {
-                    const rows = previewTable.querySelectorAll('tr');
-                    if (rows.length > 1) {
-                        console.log('[THEME PROTECTION] Data detected in table:', rows.length, 'rows');
-                        return true;
-                    }
-                }
-
-                return false;
-            }
-
-            // Show confirmation dialog
-            function showThemeDialog() {
-                console.log('[THEME PROTECTION] Showing confirmation dialog...');
-
-                const overlay = document.createElement('div');
-                overlay.id = 'theme-switch-overlay';
-                overlay.style.cssText = `
-                    position: fixed;
-                    top: 0;
-                    left: 0;
-                    width: 100%;
-                    height: 100%;
-                    background: rgba(0, 0, 0, 0.7);
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    z-index: 99999;
-                `;
-
-                const isDark = document.body.classList.contains('dark');
-                const dialog = document.createElement('div');
-                dialog.style.cssText = `
-                    background: ${isDark ? '#2D2D2D' : '#FFFFFF'};
-                    color: ${isDark ? '#E8E8E8' : '#0A0A0A'};
-                    padding: 30px;
-                    border-radius: 12px;
-                    box-shadow: none;
-                    max-width: 500px;
-                    border: 1px solid ${isDark ? '#404040' : '#D1D9E6'};
-                `;
-
-                dialog.innerHTML = `
-                    <h2 style="margin: 0 0 20px 0; font-size: 20px; font-weight: 700; color: #f43f5e;">
-                        ⚠️ Data Loss Warning
-                    </h2>
-                    <p style="margin: 0 0 24px 0; line-height: 1.6; font-size: 15px;">
-                        <strong>Switching themes will clear all loaded data.</strong><br>
-                        This includes your data preview, schema, and any analysis results.<br><br>
-                        This action cannot be undone. Are you sure?
-                    </p>
-                    <div style="display: flex; gap: 16px; justify-content: flex-end;">
-                        <button id="theme-cancel-btn" style="
-                            padding: 12px 24px;
-                            border: 2px solid ${isDark ? '#5C5C5C' : '#D1D5DB'};
-                            background: ${isDark ? '#1E1E1E' : '#FFFFFF'};
-                            color: ${isDark ? '#E8E8E8' : '#0A0A0A'};
-                            border-radius: 6px;
-                            cursor: pointer;
-                            font-weight: 600;
-                            font-size: 14px;
-                            transition: all 0.2s;
-                        ">Cancel</button>
-                        <button id="theme-confirm-btn" style="
-                            padding: 12px 24px;
-                            border: none;
-                            background: #f43f5e;
-                            color: white;
-                            border-radius: 6px;
-                            cursor: pointer;
-                            font-weight: 700;
-                            font-size: 14px;
-                            box-shadow: none;
-                            transition: all 0.2s;
-                        ">Switch Theme Anyway</button>
-                    </div>
-                `;
-
-                overlay.appendChild(dialog);
-                document.body.appendChild(overlay);
-
-                // Add hover effects
-                const cancelBtn = document.getElementById('theme-cancel-btn');
-                const confirmBtn = document.getElementById('theme-confirm-btn');
-
-                cancelBtn.onmouseenter = function() {
-                    this.style.transform = 'translateY(-1px)';
-                };
-                cancelBtn.onmouseleave = function() {
-                    this.style.transform = 'translateY(0)';
-                };
-
-                confirmBtn.onmouseenter = function() {
-                    this.style.background = '#e11d48';
-                    this.style.transform = 'translateY(-1px)';
-                };
-                confirmBtn.onmouseleave = function() {
-                    this.style.background = '#f43f5e';
-                    this.style.transform = 'translateY(0)';
-                };
-
-                // Handle clicks
-                cancelBtn.onclick = function() {
-                    document.body.removeChild(overlay);
-                    console.log('[THEME PROTECTION] User cancelled theme switch');
-                };
-
-                confirmBtn.onclick = function() {
-                    document.body.removeChild(overlay);
-                    console.log('[THEME PROTECTION] User confirmed theme switch');
-                    window.themeSwitchConfirmed = true;
-
-                    // Find and click theme button
-                    setTimeout(function() {
-                        const selectors = [
-                            'button[aria-label*="theme"]',
-                            'button[aria-label*="dark"]',
-                            'button[aria-label*="light"]',
-                            'button[class*="theme"]'
-                        ];
-
-                        for (const sel of selectors) {
-                            const btn = document.querySelector(sel);
-                            if (btn) {
-                                console.log('[THEME PROTECTION] Clicking theme button:', sel);
-                                btn.click();
-                                break;
-                            }
-                        }
-                    }, 100);
-                };
-
-                // Close on overlay click
-                overlay.onclick = function(e) {
-                    if (e.target === overlay) {
-                        document.body.removeChild(overlay);
-                        console.log('[THEME PROTECTION] Dialog cancelled');
-                    }
-                };
-
-                // Close on Escape key
-                const escapeHandler = function(e) {
-                    if (e.key === 'Escape' && document.body.contains(overlay)) {
-                        document.body.removeChild(overlay);
-                        document.removeEventListener('keydown', escapeHandler);
-                    }
-                };
-                document.addEventListener('keydown', escapeHandler);
-            }
-
-            // Intercept clicks on theme toggle button
-            document.addEventListener('click', function(e) {
-                const target = e.target;
-
-                // Only look for buttons or links (exclude checkboxes, labels, etc.)
-                const btn = target.closest('button') || target.closest('a');
-                if (!btn) return;
-
-                // Exclude checkboxes and input elements
-                if (target.tagName === 'INPUT' || target.type === 'checkbox') return;
-
-                // Get button properties
-                const btnText = (btn.textContent || btn.innerText || '').toLowerCase();
-                const btnAria = (btn.getAttribute('aria-label') || '').toLowerCase();
-                const btnClass = (btn.className || '').toLowerCase();
-                const btnId = (btn.id || '').toLowerCase();
-
-                // Exclude chart-related controls and labels
-                if (btnText.includes('chart') ||
-                    btnClass.includes('chart') ||
-                    btnAria.includes('chart') ||
-                    target.closest('.gr-checkbox') ||
-                    target.closest('label')) {
-                    return;
-                }
-
-                // Check for Gradio theme button specifically
-                // Gradio's theme toggle is usually in the header with specific classes
-                const isGradioThemeButton =
-                    btnClass.includes('theme') ||
-                    btnAria.includes('theme') ||
-                    (btnClass.includes('header') && (btnText.includes('light') || btnText.includes('dark')));
-
-                if (isGradioThemeButton) {
-                    console.log('[THEME PROTECTION] Theme button detected!');
-                    console.log('[THEME PROTECTION] Text:', btnText);
-                    console.log('[THEME PROTECTION] Aria:', btnAria);
-                    console.log('[THEME PROTECTION] Class:', btnClass);
-                    console.log('[THEME PROTECTION] ID:', btnId);
-
-                    hasData = checkForData();
-                    console.log('[THEME PROTECTION] Has data:', hasData);
-
-                    if (hasData && !window.themeSwitchConfirmed) {
-                        console.log('[THEME PROTECTION] Blocking theme switch - showing dialog');
+            Object.keys(SHORTCUTS).forEach(id => {
+                const s = SHORTCUTS[id];
+                if (e.key.toLowerCase() === s.key.toLowerCase() && 
+                    (e.ctrlKey || e.metaKey) === s.ctrl && 
+                    e.shiftKey === s.shift && 
+                    e.altKey === s.alt) {
+                    
+                    const btn = document.getElementById(id);
+                    if (btn) {
                         e.preventDefault();
-                        e.stopPropagation();
-                        e.stopImmediatePropagation();
-                        showThemeDialog();
-                        return false;
+                        btn.click();
                     }
-
-                    window.themeSwitchConfirmed = false;
-                    console.log('[THEME PROTECTION] Allowing theme switch');
                 }
-            }, true); // Use capture phase
+            });
+        }, true);
 
-            console.log('[THEME PROTECTION] Theme protection initialized');
-        })();
+        console.log('[DUCKDB-UI] Keyboard shortcuts active.');
     })();
     """
 
@@ -2210,103 +1909,96 @@ def create_ui():
                                     with gr.Column(scale=2):
                                         profile_plot = gr.Plot(label="Column Coverage (%)")
                                     with gr.Column(scale=1):
-                                        profile_coverage_table = gr.Dataframe(label="Coverage Stats")
-
-                                gr.Markdown("#### Column Statistics (SUMMARIZE)")
-                                profile_summary_table = gr.Dataframe(
-                                    label="Summary Statistics",
-                                    interactive=False,
-                                    wrap=True,
-                                    max_height=400
-                                )
+                                        with gr.Accordion("📊 Column Details", open=False):
+                                            profile_coverage_table = gr.Dataframe(label="Coverage Stats")
+                                
+                                with gr.Accordion("🔢 Summary Statistics (SUMMARIZE)", open=True):
+                                    profile_summary_table = gr.Dataframe(
+                                        label="Summary Statistics",
+                                        interactive=False,
+                                        wrap=True,
+                                        max_height=400
+                                    )
 
                     # -----------------------------
                     # TAB 2: Query Editor
                     # -----------------------------
-                    with gr.Tab("Query Editor") as sql_tab:
-                        gr.Markdown("### SQL Query Interface")
-
+                    with gr.Tab("Query Editor"):
                         with gr.Row():
                             with gr.Column(scale=2):
-                                sql_pattern_dropdown = gr.Dropdown(
-                                    choices=list(SQL_PATTERNS.keys()),
-                                    label="SQL Pattern Library",
-                                    info="Quick start queries"
+                                sql_input = gr.Code(
+                                    label="Query Editor",
+                                    language="sql",
+                                    lines=10,
+                                    value="SELECT * FROM data LIMIT 10;",
+                                    interactive=True,
+                                    elem_id="sql_editor"
                                 )
-                            with gr.Column(scale=2):
-                                sql_history_dropdown = gr.Dropdown(
-                                    choices=[],
-                                    label="Recent Queries",
-                                    info="Re-run previous SQL"
-                                )
-
-                        sql_input = gr.Code(
-                            language="sql",
-                            lines=10,
-                            label="Query Editor",
-                            value="SELECT * FROM data LIMIT 10;",
-                            interactive=True
-                        )
-
-                        with gr.Row():
-                            run_sql_btn = gr.Button("Run Query", variant="primary", elem_classes=["btn-run"], elem_id="run_sql_btn")
-                            format_btn = gr.Button("Prettify SQL", elem_classes=["btn-format"], elem_id="format_btn")
-
-                        with gr.Row():
-                            with gr.Column(scale=2):
-                                save_pattern_name = gr.Textbox(label="New Pattern Name", placeholder="e.g. My Custom Analysis", interactive=True)
+                                with gr.Row():
+                                    run_sql_btn = gr.Button("▶️ Run Query", variant="primary", elem_classes=["btn-run"], elem_id="run_sql_btn")
+                                    format_btn = gr.Button("✨ Prettify SQL", elem_classes=["btn-format"], elem_id="format_btn")
+                                    
+                                with gr.Accordion("📝 Save as Pattern", open=False):
+                                    with gr.Row():
+                                        save_pattern_name = gr.Textbox(label="Pattern Name", placeholder="e.g. Monthly Sales Summary", interactive=True)
+                                        save_pattern_btn = gr.Button("💾 Save", elem_classes=["btn-save"], elem_id="save_pattern_btn")
+                                
                             with gr.Column(scale=1):
-                                save_pattern_btn = gr.Button("Save as Pattern", elem_classes=["btn-save"], elem_id="save_pattern_btn")
+                                with gr.Accordion("⚙️ Advanced Query Options", open=True):
+                                    sql_pattern_dropdown = gr.Dropdown(
+                                        label="SQL Templates",
+                                        choices=list(SQL_PATTERNS.keys()),
+                                        interactive=True
+                                    )
+                                    sql_history_dropdown = gr.Dropdown(
+                                        label="Recent Queries",
+                                        choices=[],
+                                        interactive=True,
+                                        info="Re-run previous SQL"
+                                    )
+                                    
+                                    with gr.Row():
+                                        row_slider_sql = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows to Preview")
+                                        col_dropdown_sql = gr.Dropdown(choices=["5", "10", "20", "50", "All"], value="All", label="Columns")
 
-                        save_status = gr.Textbox(label="Save Status", lines=1, interactive=False)
+                        with gr.Tabs():
+                            with gr.Tab("📊 Results Table"):
+                                with gr.Row():
+                                    gr.Markdown("**Export Last Result:**")
+                                    sql_export_csv_btn = gr.DownloadButton("⬇️ CSV", size="sm", elem_classes=["btn-export"])
+                                    sql_export_json_btn = gr.DownloadButton("⬇️ JSON", size="sm", elem_classes=["btn-export"])
+                                    sql_export_parquet_btn = gr.DownloadButton("⬇️ Parquet", size="sm", elem_classes=["btn-export"])
+                                    sql_export_xlsx_btn = gr.DownloadButton("⬇️ Excel", size="sm", elem_classes=["btn-export"])
 
-                        with gr.Row():
-                            row_slider_sql = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows")
-                            col_dropdown_sql = gr.Dropdown(choices=["5", "10", "20", "50", "All"], value="All", label="Cols")
+                                sql_results = gr.Dataframe(
+                                    label="Query Results",
+                                    interactive=False,
+                                    wrap=True,
+                                    elem_id="sql-results",
+                                    max_height=500
+                                )
+                                sql_css_override = gr.HTML("")
 
-                        sql_status = gr.Textbox(label="Execution Status", lines=1, interactive=False)
+                            with gr.Tab("📈 Visualizer"):
+                                with gr.Accordion("🎨 Chart Configuration", open=True):
+                                    with gr.Row():
+                                        sql_chart_type = gr.Dropdown(
+                                            choices=["Bar", "Line", "Scatter", "Pie", "Histogram"],
+                                            value="Bar",
+                                            label="Chart Type"
+                                        )
+                                        sql_x_axis = gr.Dropdown(choices=[], label="X-Axis")
+                                        sql_y_axis = gr.Dropdown(choices=[], label="Y-Axis")
 
-                        # Export buttons for SQL
-                        with gr.Row():
-                            gr.Markdown("**Export Last Result:**")
-                            sql_export_csv_btn = gr.Button("CSV", size="sm", elem_classes=["btn-export"], elem_id="sql_export_csv_btn")
-                            sql_export_json_btn = gr.Button("JSON", size="sm", elem_classes=["btn-export"], elem_id="sql_export_json_btn")
-                            sql_export_parquet_btn = gr.Button("Parquet", size="sm", elem_classes=["btn-export"], elem_id="sql_export_parquet_btn")
-                            sql_export_xlsx_btn = gr.Button("Excel", size="sm", elem_classes=["btn-export"], elem_id="sql_export_xlsx_btn")
+                                    with gr.Row():
+                                        sql_color_by = gr.Dropdown(choices=[], label="Color By")
+                                        sql_facet_by = gr.Dropdown(choices=[], label="Facet By")
 
-                        sql_export_download = gr.File(label="Download Exported File", visible=False)
+                                    with gr.Row():
+                                        sql_show_trend = gr.Checkbox(label="Show Trend Line (Scatter Only)", value=False)
+                                        sql_dark_toggle = gr.Checkbox(label="Dark Mode Charts", value=False)
 
-                        sql_results = gr.Dataframe(
-                            label="Query Results",
-                            interactive=False,
-                            wrap=True,
-                            elem_id="sql-results",
-                            max_height=500
-                        )
-                        sql_css_override = gr.HTML("")
-
-                        gr.Markdown("---")
-                        gr.Markdown("### Visualization Control")
-                        with gr.Row():
-                            sql_chart_type = gr.Dropdown(
-                                choices=["Bar", "Line", "Scatter", "Pie", "Histogram"],
-                                value="Bar",
-                                label="Chart Type"
-                            )
-                            sql_x_axis = gr.Dropdown(choices=[], label="X-Axis")
-                            sql_y_axis = gr.Dropdown(choices=[], label="Y-Axis")
-
-                        with gr.Row():
-                            sql_color_by = gr.Dropdown(choices=[], label="Color By")
-                            sql_facet_by = gr.Dropdown(choices=[], label="Facet By")
-
-                        with gr.Row():
-                            sql_show_trend = gr.Checkbox(label="Show Trend Line (Scatter Only)", value=False)
-                            # @MX:NOTE: Defaults to False (follows Gradio theme)
-                            # User can check to force dark charts even in light mode
-                            sql_dark_toggle = gr.Checkbox(label="Dark Mode Charts", value=False)
-
-                        sql_chart_display = gr.Plot(label="SQL Chart")
+                                sql_chart_display = gr.Plot(label="SQL Chart")
 
                     # -----------------------------
                     # TAB 3: Progress Monitoring
@@ -2456,14 +2148,16 @@ def create_ui():
         load_btn.click(
             fn=handle_load_click,
             inputs=[file_input, header_check, kv_check, table_mapping_input],
-            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, exec_stats, table_dropdown, app_state]
+            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, exec_stats, table_dropdown, app_state],
+            api_name="load_data"
         )
         logger.info("[EVENT_SETUP] ✓ load_btn.click → handle_load_click")
         
         table_dropdown.change(
             fn=handle_table_switch,
             inputs=[table_dropdown, app_state, profile_dark_toggle],
-            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, app_state]
+            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, app_state],
+            api_name="switch_table"
         )
 
         logger.info("[EVENT_SETUP] All event handlers wired successfully.")
@@ -2480,7 +2174,7 @@ def create_ui():
 
             if global_processor is None:
                 logger.warning("[DARK_MODE] No data loaded, skipping chart regeneration")
-                return gr.update(), gr.update()
+                return gr.update(), gr.update(), gr.update()
 
             try:
                 health_fig, health_df, profile_df = get_data_profiling(is_dark=is_dark)
@@ -2492,7 +2186,7 @@ def create_ui():
                 )
             except Exception as e:
                 logger.error(f"[DARK_MODE] Failed to regenerate charts: {e}")
-                return gr.update(), gr.update()
+                return gr.update(), gr.update(), gr.update()
 
         # Query Editor tab - dark mode toggle for SQL charts
         def handle_sql_dark_toggle(is_dark, current_chart, df):
@@ -2565,7 +2259,6 @@ def create_ui():
             fn=handle_run_sql,
             inputs=[sql_input, row_slider_sql, col_dropdown_sql, sql_dark_toggle, app_state],
             outputs=[
-                sql_status,           # Execution status message
                 sql_results,          # Results dataframe
                 sql_css_override,     # CSS for table styling
                 sql_history_dropdown, # Update history
@@ -2577,7 +2270,8 @@ def create_ui():
                 sql_facet_by,         # Update chart controls
                 exec_stats,           # Execution statistics
                 app_state             # Browser state persistence
-            ]
+            ],
+            api_name="execute_sql"
         )
         logger.info("[EVENT_SETUP] ✓ run_sql_btn.click → handle_run_sql")
 
@@ -2591,7 +2285,7 @@ def create_ui():
         save_pattern_btn.click(
             fn=handle_save_pattern,
             inputs=[save_pattern_name, sql_input],
-            outputs=[save_status, sql_pattern_dropdown]
+            outputs=[sql_pattern_dropdown]
         )
         logger.info("[EVENT_SETUP] ✓ save_pattern_btn.click → handle_save_pattern")
 
@@ -2618,50 +2312,46 @@ def create_ui():
         # Export button handlers (CSV, JSON, Parquet, Excel)
         def handle_export_csv(df):
             """Handle CSV export."""
-            path = export_results("csv", df)
-            return gr.update(value=path, visible=True) if path else gr.update()
+            return export_results("csv", df)
 
         def handle_export_json(df):
             """Handle JSON export."""
-            path = export_results("json", df)
-            return gr.update(value=path, visible=True) if path else gr.update()
+            return export_results("json", df)
 
         def handle_export_parquet(df):
             """Handle Parquet export."""
-            path = export_results("parquet", df)
-            return gr.update(value=path, visible=True) if path else gr.update()
+            return export_results("parquet", df)
 
         def handle_export_xlsx(df):
             """Handle Excel export."""
-            path = export_results("xlsx", df)
-            return gr.update(value=path, visible=True) if path else gr.update()
+            return export_results("xlsx", df)
 
         # Wire up export button handlers
         sql_export_csv_btn.click(
             fn=handle_export_csv,
             inputs=[sql_state],
-            outputs=[sql_export_download]
+            outputs=[sql_export_csv_btn]
         )
         logger.info("[EVENT_SETUP] ✓ sql_export_csv_btn.click → handle_export_csv")
 
         sql_export_json_btn.click(
             fn=handle_export_json,
             inputs=[sql_state],
-            outputs=[sql_export_download]
+            outputs=[sql_export_json_btn]
         )
         logger.info("[EVENT_SETUP] ✓ sql_export_json_btn.click → handle_export_json")
 
         sql_export_parquet_btn.click(
             fn=handle_export_parquet,
             inputs=[sql_state],
-            outputs=[sql_export_download]
+            outputs=[sql_export_parquet_btn]
         )
         logger.info("[EVENT_SETUP] ✓ sql_export_parquet_btn.click → handle_export_parquet")
 
         sql_export_xlsx_btn.click(
             fn=handle_export_xlsx,
             inputs=[sql_state],
-            outputs=[sql_export_download]
+            outputs=[sql_export_xlsx_btn]
         )
         logger.info("[EVENT_SETUP] ✓ sql_export_xlsx_btn.click → handle_export_xlsx")
 
@@ -2724,11 +2414,6 @@ def create_ui():
 def launch_ui():
     """Launch the Gradio UI with predefined configuration."""
     app, theme, css, keyboard_shortcuts_js = create_ui()
-
-    # Debug: Verify JavaScript is generated correctly
-    print(f"[DEBUG] JavaScript length: {len(keyboard_shortcuts_js)} characters")
-    print(f"[DEBUG] JavaScript contains theme protection: {'THEME PROTECTION' in keyboard_shortcuts_js}")
-    print(f"[DEBUG] JavaScript preview (first 500 chars):\n{keyboard_shortcuts_js[:500]}")
 
     # Configure the launch parameters
     app.launch(
