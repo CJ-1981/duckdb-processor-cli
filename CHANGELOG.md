@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Multi-input file support** - Load multiple CSV files simultaneously for joining and cross-analysis.
+- **Table name mapping** - Support for `file.csv:table_name` syntax in CLI and a new mapping text box in Gradio UI.
+- **Multi-file Navigation in UI** - New dropdown in Gradio UI to switch between loaded tables for preview and profiling.
+- **Robust identifier quoting** - All table references are now automatically quoted to support table names starting with digits or containing special characters.
 - **Interactive file dialog** - Prompt to open a native file picker dialog when no input file is provided in an interactive terminal.
 - **CLI export format support** - New `--export-format` flag to export analyst query results to CSV, JSON, XLSX, or Parquet.
 - **Business Logic Pattern Examples** - Six new example analysts (`basic_patterns`, `time_analysis`, `data_quality`, `business_metrics`, `python_patterns`, `sql_examples`).

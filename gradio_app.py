@@ -213,7 +213,7 @@ def get_data_profiling(is_dark=False):
             fig.update_layout(paper_bgcolor=bg_color, plot_bgcolor=bg_color)
         
         # New: Get summary statistics using DuckDB SUMMARIZE
-        profile_df = global_processor.con.execute(f"SUMMARIZE {global_processor.table}").df()
+        profile_df = global_processor.con.execute(f'SUMMARIZE "{global_processor.table}"').df()
         
         # Explicitly round typical numeric-stat columns for readability
         for col in ['min', 'max', 'avg', 'std', 'q25', 'q50', 'q75', 'null_percentage']:
@@ -428,15 +428,29 @@ def refresh_profiling(is_dark):
     fig, df_cov, df_sum = get_data_profiling(is_dark=is_dark)
     return fig
 
-def load_data(file_obj, header, kv, is_dark=False):
+def load_data(file_objs, header, kv, table_mapping="", is_dark=False):
     """Load the CSV into DuckDB via Processor API and return preview."""
     global global_processor, execution_stats
-    # Handle the case where file_obj is a path (string) or a Gradio file object
-    file_path = file_obj if isinstance(file_obj, str) else (file_obj.name if file_obj else None)
+    
+    if not file_objs:
+        return "⚠️ No file provided.", None, "No data.", None, None, None, gr.update(), gr.update(), gr.update(visible=False)
 
-    logger.info(f"Loading data: file={file_path}, header={header}, kv={kv}")
-    if not file_path:
-        return "⚠️ No file provided.", None, "No data.", None, None, None, gr.update()
+    # Handle single file or list
+    if not isinstance(file_objs, list):
+        file_objs = [file_objs]
+        
+    table_names = [t.strip() for t in table_mapping.split(',')] if table_mapping else []
+    
+    file_paths = []
+    for i, f in enumerate(file_objs):
+        f_path = f if isinstance(f, str) else (f.name if hasattr(f, 'name') else None)
+        if f_path:
+            if i < len(table_names) and table_names[i]:
+                file_paths.append(f"{f_path}:{table_names[i]}")
+            else:
+                file_paths.append(f_path)
+            
+    logger.info(f"Loading data: files={file_paths}, header={header}, kv={kv}")
 
     try:
         # Reset execution statistics when loading new data
@@ -447,20 +461,23 @@ def load_data(file_obj, header, kv, is_dark=False):
         }
 
         # Pass file path to config
-        config = ProcessorConfig(file=file_path, header=header, kv=kv)
+        config = ProcessorConfig(files=file_paths, header=header, kv=kv)
         global_processor = load(config)
 
         # Save session info for auto-recovery
-        save_session_to_disk(file_path, header, kv)
+        save_session_to_disk(file_paths[0] if file_paths else None, header, kv)
 
         info = global_processor.info()
-        info_str = f"Rows: {info.get('rows', '?')}, Cols: {info.get('cols', '?')}"
+        info_str = f"Rows: {info.get('rows', '?')}, Cols: {len(info.get('columns', []))}"
         stats_text = get_execution_stats()
 
         # Only fetch 20 rows for preview to avoid large white space
         preview_df = global_processor.preview(20)
         schema_str = get_schema_info()
         health_fig, health_df, profile_df = get_data_profiling(is_dark=is_dark)
+
+        tables = global_processor.get_tables()
+        table_dropdown_update = gr.update(choices=tables, value=global_processor.table, visible=True)
 
         logger.info("Data loaded successfully.")
         return (
@@ -471,12 +488,13 @@ def load_data(file_obj, header, kv, is_dark=False):
             health_df,
             profile_df,
             gr.update(value=info_str),  # progress_box
-            gr.update(value=stats_text)  # exec_stats
+            gr.update(value=stats_text), # exec_stats
+            table_dropdown_update # active table
         )
     except Exception as e:
         error_msg = f"❌ Error loading data: {e}"
         logger.error(f"{error_msg}\n{traceback.format_exc()}")
-        return error_msg, None, "Error", None, None, None, gr.update(), gr.update()
+        return error_msg, None, "Error", None, None, None, gr.update(), gr.update(), gr.update(visible=False)
 
 def run_analysis(analyzer_name, max_rows, max_cols, is_dark=False):
     """Run the selected analyzer against the loaded processor."""
@@ -1109,7 +1127,7 @@ custom_css = """
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
 /* Override Gradio defaults with DataGrip-inspired theme */
-.gradio-container {
+body, .gradio-container {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
     /* Light mode: white background */
     background-color: #FFFFFF !important;
@@ -1234,7 +1252,7 @@ kbd {
     font-family: 'JetBrains Mono', monospace;
     font-size: 11px;
     color: #1E1E1E;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    box-shadow: none;
 }
 
 /* Dark mode keyboard shortcuts */
@@ -1242,7 +1260,7 @@ kbd {
     background: #3A3A3A;
     border: 1px solid #404040;
     color: #E8E8E8;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    box-shadow: none;
 }
 
 /* Status badge with DataGrip-inspired colors */
@@ -1378,7 +1396,7 @@ button.btn-load, .btn-load {
 }
 button.btn-load:hover, .btn-load:hover {
     background: #5BA3F5 !important;
-    box-shadow: 0 2px 4px rgba(74, 144, 226, 0.3) !important;
+    box-shadow: none;
 }
 
 /* Run Button - Accent Blue (works in both modes) */
@@ -1390,7 +1408,7 @@ button.btn-run, .btn-run {
 }
 button.btn-run:hover, .btn-run:hover {
     background: #5BA3F5 !important;
-    box-shadow: 0 2px 4px rgba(74, 144, 226, 0.3) !important;
+    box-shadow: none;
 }
 
 /* Prettify/Format Button - Blue Tones (Light mode) */
@@ -1448,7 +1466,7 @@ button.btn-test, .btn-test {
 }
 button.btn-test:hover, .btn-test:hover {
     background: #5BA3F5 !important;
-    box-shadow: 0 2px 4px rgba(74, 144, 226, 0.3) !important;
+    box-shadow: none;
 }
 
 /* Delete Button - Rose/Danger */
@@ -1479,7 +1497,7 @@ button.btn-new:hover, .btn-new:hover { background: #4f46e5 !important; color: wh
     font-size: 11px;
     font-weight: 500;
     color: #0A0A0A !important;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    box-shadow: none;
     line-height: 1;
     min-width: 24px;
     justify-content: center;
@@ -1489,7 +1507,7 @@ button.btn-new:hover, .btn-new:hover { background: #4f46e5 !important; color: wh
     background: #3A3A3A !important;
     border-color: #404040 !important;
     color: #E8E8E8 !important;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    box-shadow: none;
 }
 
 .kbd-shortcut .modifier, button kbd .modifier {
@@ -1598,7 +1616,7 @@ button.btn-export:hover, .btn-export:hover {
 }
 
 .btn-test:hover {
-    box-shadow: 0 2px 8px rgba(76, 175, 80, 0.4) !important;
+    box-shadow: none;
 }
 
 .btn-delete {
@@ -1742,8 +1760,8 @@ def create_ui():
         # Spacing
         block_padding="12px",
         # Shadows
-        shadow_drop="0 1px 2px rgba(0, 0, 0, 0.3)",
-        shadow_drop_lg="0 4px 6px rgba(0, 0, 0, 0.4)",
+        shadow_drop="none",
+        shadow_drop_lg="none",
     )
 
     app_theme = theme
@@ -1975,7 +1993,7 @@ def create_ui():
                     color: ${isDark ? '#E8E8E8' : '#0A0A0A'};
                     padding: 30px;
                     border-radius: 12px;
-                    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+                    box-shadow: none;
                     max-width: 500px;
                     border: 1px solid ${isDark ? '#404040' : '#D1D9E6'};
                 `;
@@ -2010,7 +2028,7 @@ def create_ui():
                             cursor: pointer;
                             font-weight: 700;
                             font-size: 14px;
-                            box-shadow: 0 2px 8px rgba(244, 63, 94, 0.3);
+                            box-shadow: none;
                             transition: all 0.2s;
                         ">Switch Theme Anyway</button>
                     </div>
@@ -2161,18 +2179,20 @@ def create_ui():
         
         with gr.Row():
             with gr.Column(scale=1):
-                file_input = gr.File(label="Upload CSV File", file_types=[".csv", ".tsv", ".txt"])
-                
+                file_input = gr.File(label="Upload Data File(s)", file_types=[".csv", ".tsv", ".txt", ".json", ".parquet"], file_count="multiple")
+
                 with gr.Row():
                     header_check = gr.Checkbox(label="Has Header?", value=True)
                     kv_check = gr.Checkbox(label="Is Key-Value Pairs?", value=False)
-                
+                    
+                table_mapping_input = gr.Textbox(label="Table Names Mapping (comma-separated)", placeholder="e.g. table1, table2", info="Optional. Matches the order of uploaded files.")
+
+                table_dropdown = gr.Dropdown(label="Active Table (Navigation)", choices=[], interactive=True, visible=False)
                 load_btn = gr.Button("Load Data", variant="primary", elem_classes=["btn-load"], elem_id="load_btn")
                 info_box = gr.Textbox(label="Data Info & Status", lines=10, interactive=False)
-                
+
                 # Schema sidebar component
-                schema_sidebar = gr.Code(label="Table Schema", language="sql", interactive=False, lines=15)
-            
+                schema_sidebar = gr.Code(label="Table Schema", language="sql", interactive=False, lines=15)            
             with gr.Column(scale=3):
                 with gr.Tabs() as main_tabs:
                     # -----------------------------
@@ -2361,17 +2381,17 @@ def create_ui():
             return gr.update(), f"✅ File '{file_obj.name if hasattr(file_obj, 'name') else file_obj}' ready. Click 'Load Data' to process."
 
         # Load button click handler - loads the data
-        def handle_load_click(file_obj, header, kv):
+        def handle_load_click(file_obj, header, kv, table_mapping_input):
             """Handle Load Data button click with debug logging."""
             log_event("load_click", file_obj, header, kv)
             logger.info(f"[LOAD_BTN] Loading: file={file_obj}, header={header}, kv={kv}")
 
-            result = load_data(file_obj, header, kv, is_dark=False)
+            result = load_data(file_obj, header, kv, table_mapping=table_mapping_input, is_dark=False)
             logger.info(f"[LOAD_BTN] Result: type={type(result)}, len={len(result) if hasattr(result, '__len__') else 'N/A'}")
 
-            # Unpack the 8-element tuple from load_data
-            if len(result) == 8:
-                info_msg, preview_df, schema_str, health_fig, health_df, profile_df, progress_update, stats_update = result
+            # Unpack the 9-element tuple from load_data
+            if len(result) == 9:
+                info_msg, preview_df, schema_str, health_fig, health_df, profile_df, progress_update, stats_update, table_dropdown_update = result
                 logger.info(f"[LOAD_BTN] Info: {info_msg[:50] if info_msg else 'None'}...")
                 return (
                     info_msg,           # info_box
@@ -2381,14 +2401,44 @@ def create_ui():
                     health_df,          # profile_coverage_table
                     profile_df,         # profile_summary_table
                     progress_update,    # progress_box
-                    stats_update        # exec_stats
+                    stats_update,       # exec_stats
+                    table_dropdown_update # table_dropdown
                 )
             else:
                 logger.error(f"[LOAD_BTN] Unexpected result length: {len(result)}")
                 # Add missing updates if needed
-                while len(result) < 8:
+                while isinstance(result, tuple) and len(result) < 9:
                     result = result + (gr.update(),)
+                if not isinstance(result, tuple):
+                    result = (gr.update(),) * 9
                 return result
+
+        def handle_table_switch(table_name, is_dark=False):
+            if not global_processor or not table_name:
+                return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+            
+            try:
+                global_processor.set_active_table(table_name)
+                info = global_processor.info()
+                info_str = f"Rows: {info.get('rows', '?')}, Cols: {len(info.get('columns', []))}"
+                stats_text = get_execution_stats()
+                
+                preview_df = global_processor.preview(20)
+                schema_str = get_schema_info()
+                health_fig, health_df, profile_df = get_data_profiling(is_dark=is_dark)
+                
+                return (
+                    f"✅ Switched to Table: {table_name}\n\n{info_str}",
+                    preview_df,
+                    schema_str,
+                    health_fig,
+                    health_df,
+                    profile_df,
+                    gr.update(value=info_str)
+                )
+            except Exception as e:
+                logger.error(f"Error switching table: {e}")
+                return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
 
         # Wire up event handlers
         logger.info("[EVENT_SETUP] Wiring up Gradio event handlers...")
@@ -2404,10 +2454,16 @@ def create_ui():
         # Load button → load data
         load_btn.click(
             fn=handle_load_click,
-            inputs=[file_input, header_check, kv_check],
-            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, exec_stats]
+            inputs=[file_input, header_check, kv_check, table_mapping_input],
+            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, exec_stats, table_dropdown]
         )
         logger.info("[EVENT_SETUP] ✓ load_btn.click → handle_load_click")
+        
+        table_dropdown.change(
+            fn=handle_table_switch,
+            inputs=[table_dropdown],
+            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box]
+        )
 
         logger.info("[EVENT_SETUP] All event handlers wired successfully.")
 

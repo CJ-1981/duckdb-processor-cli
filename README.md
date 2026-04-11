@@ -63,6 +63,28 @@ python -m duckdb_processor data.csv --run sample_data_sql_examples
 python -m duckdb_processor data.csv --interactive
 ```
 
+### Multi-File Support
+
+You can load multiple files at once for joining and cross-analysis.
+
+```bash
+# Load multiple files (auto-named by filename)
+python -m duckdb_processor sales.csv users.csv --interactive
+
+# Load with custom table mapping
+python -m duckdb_processor sales.csv:sales users.csv:customers --interactive
+```
+
+Inside the interactive REPL, you can join them:
+```sql
+sql> SELECT * FROM sales JOIN customers ON sales.user_id = customers.id;
+```
+
+#### Gradio UI Multi-File Support
+The Gradio UI also supports uploading multiple files and providing table name mappings. You can navigate between loaded tables using the "Active Table (Navigation)" dropdown.
+
+---
+
 ### Command-Line Options
 
 #### File Loading

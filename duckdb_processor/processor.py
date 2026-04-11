@@ -74,6 +74,24 @@ class Processor:
         self.last_result: pd.DataFrame | None = None  # Track last query result for export
         self.last_query: str | None = None           # Track last SQL string
         self.last_action: str | None = None          # Track what created the last result
+        self._tables_info: dict | None = None        # Track multiple loaded tables
+
+    def get_tables(self) -> list[str]:
+        """Return a list of all loaded table names."""
+        if self._tables_info:
+            return list(self._tables_info.keys())
+        return [self.table]
+
+    def set_active_table(self, table: str) -> None:
+        """Switch the active table for the processor."""
+        if self._tables_info and table in self._tables_info:
+            self.table = table
+            self.columns = self._tables_info[table]["columns"]
+            self._meta = self._tables_info[table]["meta"]
+        elif table == self.table:
+            pass
+        else:
+            raise ValueError(f"Table '{table}' not found in loaded data.")
 
     # ── Metadata ─────────────────────────────────────────────
 
@@ -145,11 +163,11 @@ class Processor:
 
     def preview(self, n: int = 10) -> pd.DataFrame:
         """Return the first *n* rows from the table."""
-        return self.con.execute(f"SELECT * FROM {self.table} LIMIT {n}").df()
+        return self.con.execute(f'SELECT * FROM "{self.table}" LIMIT {n}').df()
 
     def schema(self) -> pd.DataFrame:
         """Return column names and their DuckDB types."""
-        return self.con.execute(f"DESCRIBE {self.table}").df()
+        return self.con.execute(f'DESCRIBE "{self.table}"').df()
 
     def coverage(self) -> pd.DataFrame:
         """Report the non-null fill rate for every business column.
@@ -160,13 +178,13 @@ class Processor:
             Columns: ``column``, ``present``, ``coverage_%``.
         """
         total = self.con.execute(
-            f"SELECT COUNT(*) FROM {self.table}"
+            f'SELECT COUNT(*) FROM "{self.table}"'
         ).fetchone()[0]
 
         rows: list[dict] = []
         for c in self.columns:
             count = self.con.execute(
-                f'SELECT COUNT(*) FROM {self.table} '
+                f'SELECT COUNT(*) FROM "{self.table}" '
                 f'WHERE "{c}" IS NOT NULL AND CAST("{c}" AS VARCHAR) != \'\''
             ).fetchone()[0]
             rows.append(
@@ -188,7 +206,7 @@ class Processor:
         >>> p.filter("status = 'active' AND CAST(amount AS DOUBLE) >= 500")
         >>> p.filter("status = ? AND category = ?", ["active", "electronics"])
         """
-        return self.sql(f"SELECT * FROM {self.table} WHERE {where}", parameters)
+        return self.sql(f'SELECT * FROM "{self.table}" WHERE {where}', parameters)
 
     def create_view(self, name: str, where: str) -> None:
         """Persist a filtered view for use in later queries.
@@ -200,7 +218,7 @@ class Processor:
         """
         self.con.execute(
             f"CREATE OR REPLACE VIEW {name} AS "
-            f"SELECT * FROM {self.table} WHERE {where}"
+            f'SELECT * FROM "{self.table}" WHERE {where}'
         )
         print(f"View '{name}' created")
 
@@ -225,14 +243,14 @@ class Processor:
         ... ''')
         """
         tbl = source or self.table
-        existing = [r[0] for r in self.con.execute(f"DESCRIBE {tbl}").fetchall()]
+        existing = [r[0] for r in self.con.execute(f'DESCRIBE "{tbl}"').fetchall()]
         if new_col in existing:
-            self.con.execute(f'ALTER TABLE {tbl} DROP COLUMN "{new_col}"')
+            self.con.execute(f'ALTER TABLE "{tbl}" DROP COLUMN "{new_col}"')
         self.con.execute(
-            f'ALTER TABLE {tbl} ADD COLUMN "{new_col}" VARCHAR'
+            f'ALTER TABLE "{tbl}" ADD COLUMN "{new_col}" VARCHAR'
         )
         
-        update_sql = f'UPDATE {tbl} SET "{new_col}" = CAST(({expr}) AS VARCHAR)'
+        update_sql = f'UPDATE "{tbl}" SET "{new_col}" = CAST(({expr}) AS VARCHAR)'
         if parameters is not None:
             self.con.execute(update_sql, parameters)
         else:
@@ -281,7 +299,7 @@ class Processor:
                    COUNT(*)                                        AS count,
                    ROUND({func}(TRY_CAST("{agg_field}" AS DOUBLE)), 2)
                        AS {func.lower()}_{agg_field}
-            FROM {tbl}
+            FROM "{tbl}"
             WHERE "{agg_field}" IS NOT NULL AND CAST("{agg_field}" AS VARCHAR) != ''
             GROUP BY {gb}
             ORDER BY {func.lower()}_{agg_field} DESC
@@ -308,7 +326,7 @@ class Processor:
         col_vals = [
             r[0]
             for r in self.con.execute(
-                f'SELECT DISTINCT "{col_key}" FROM {tbl} '
+                f'SELECT DISTINCT "{col_key}" FROM "{tbl}" '
                 f'WHERE "{col_key}" IS NOT NULL ORDER BY "{col_key}"'
             ).fetchall()
         ]
@@ -320,7 +338,7 @@ class Processor:
         )
         return self.sql(f"""
             SELECT "{row_key}", {cases}
-            FROM {tbl}
+            FROM "{tbl}"
             GROUP BY "{row_key}"
             ORDER BY "{row_key}"
         """)
@@ -338,7 +356,7 @@ class Processor:
             SQL query whose results to export.  ``None`` exports the
             entire table.
         """
-        q = query or f"SELECT * FROM {self.table}"
+        q = query or f'SELECT * FROM "{self.table}"'
         self.con.execute(f"COPY ({q}) TO '{path}' (HEADER, DELIMITER ',')")
         print(f"Exported \u2192 {path}")
 
@@ -347,14 +365,14 @@ class Processor:
 
         The output is a pretty-printed array of objects.
         """
-        q = query or f"SELECT * FROM {self.table}"
+        q = query or f'SELECT * FROM "{self.table}"'
         rows = self.con.execute(q).df().to_dict(orient="records")
         Path(path).write_text(json.dumps(rows, indent=2, default=str))
         print(f"Exported \u2192 {path}")
 
     def export_parquet(self, path: str, query: str | None = None) -> None:
         """Export to Parquet for efficient storage or later reload."""
-        q = query or f"SELECT * FROM {self.table}"
+        q = query or f'SELECT * FROM "{self.table}"'
         self.con.execute(f"COPY ({q}) TO '{path}' (FORMAT PARQUET)")
         print(f"Exported \u2192 {path}")
 
@@ -378,7 +396,7 @@ class Processor:
             print("Or install with: pip install duckdb_processor[export]")
             return
 
-        q = query or f"SELECT * FROM {self.table}"
+        q = query or f'SELECT * FROM "{self.table}"'
         df = self.sql(q)
 
         wb = Workbook()
