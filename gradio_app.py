@@ -480,8 +480,28 @@ def load_data(file_objs, header, kv, table_mapping="", is_dark=False):
         table_dropdown_update = gr.update(choices=tables, value=global_processor.table, visible=True)
 
         logger.info("Data loaded successfully.")
+        
+        # Prepare state for BrowserState persistence
+        # We store the raw file paths (without mapping suffixes) to avoid duplication on recovery
+        raw_paths = []
+        for f in file_objs:
+            p = f if isinstance(f, str) else (f.name if hasattr(f, 'name') else None)
+            if p:
+                # If it already has a colon mapping, strip it for storage
+                if ":" in p and not os.path.exists(p):
+                    p = p.rsplit(":", 1)[0]
+                raw_paths.append(p)
+
+        new_state = {
+            "files": raw_paths,
+            "header": header,
+            "kv": kv,
+            "table_mapping": table_mapping,
+            "active_table": global_processor.table
+        }
+
         return (
-            f"✅ Data Loaded Successfully\n\n{info_str}\n\n⚠️ WARNING: Switching between light/dark theme will clear all loaded data.",
+            f"✅ Data Loaded Successfully\n\n{info_str}\n\n💡 Theme switching is now protected! Your data will persist.",
             preview_df,
             schema_str,
             health_fig,
@@ -489,12 +509,13 @@ def load_data(file_objs, header, kv, table_mapping="", is_dark=False):
             profile_df,
             gr.update(value=info_str),  # progress_box
             gr.update(value=stats_text), # exec_stats
-            table_dropdown_update # active table
+            table_dropdown_update, # active table
+            new_state # BrowserState
         )
     except Exception as e:
         error_msg = f"❌ Error loading data: {e}"
         logger.error(f"{error_msg}\n{traceback.format_exc()}")
-        return error_msg, None, "Error", None, None, None, gr.update(), gr.update(), gr.update(visible=False)
+        return error_msg, None, "Error", None, None, None, gr.update(), gr.update(), gr.update(visible=False), gr.update()
 
 def run_analysis(analyzer_name, max_rows, max_cols, is_dark=False):
     """Run the selected analyzer against the loaded processor."""
@@ -1688,6 +1709,62 @@ button.btn-export:hover, .btn-export:hover {
 }
 """
 
+def restore_session(state, profile_dark, sql_dark):
+    """Restore the application state from BrowserState (localStorage)."""
+    if not state or not state.get("files"):
+        return [gr.update()] * 15
+
+    logger.info(f"[RECOVERY] Attempting to restore session from state: {state}")
+    try:
+        # 1. Trigger the load logic with saved parameters
+        res = load_data(
+            state["files"], 
+            state["header"], 
+            state["kv"], 
+            table_mapping=state.get("table_mapping", ""), 
+            is_dark=profile_dark
+        )
+        
+        if len(res) == 10:
+            # 2. Handle active table restoration if different from default
+            active_table = state.get("active_table")
+            if active_table and global_processor and active_table != global_processor.table:
+                try:
+                    global_processor.set_active_table(active_table)
+                    # Re-fetch data for the active table
+                    info = global_processor.info()
+                    info_str = f"Rows: {info.get('rows', '?')}, Cols: {len(info.get('columns', []))}"
+                    preview_df = global_processor.preview(20)
+                    schema_str = get_schema_info()
+                    health_fig, health_df, profile_df = get_data_profiling(is_dark=profile_dark)
+                    
+                    # Update the results from load_data with active table specific ones
+                    res_list = list(res)
+                    res_list[0] = f"✅ Session Restored: Table {active_table}\n\n{info_str}"
+                    res_list[1] = preview_df
+                    res_list[2] = schema_str
+                    res_list[3] = health_fig
+                    res_list[4] = health_df
+                    res_list[5] = profile_df
+                    res_list[6] = gr.update(value=info_str)
+                    res_list[8] = gr.update(value=active_table)
+                    res = tuple(res_list)
+                except Exception as e:
+                    logger.warning(f"[RECOVERY] Failed to restore active table '{active_table}': {e}")
+
+            # 3. Add updates for input components and SQL query
+            return list(res) + [
+                gr.update(value=state["files"]),
+                gr.update(value=state["header"]),
+                gr.update(value=state["kv"]),
+                gr.update(value=state.get("table_mapping", "")),
+                gr.update(value=state.get("sql_query", "SELECT * FROM data LIMIT 10"))
+            ]
+    except Exception as e:
+        logger.error(f"[RECOVERY] Restoration failed: {e}")
+    
+    return [gr.update()] * 15
+
 def create_ui():
     # DataGrip-inspired custom theme with grayscale palette
     from gradio.themes import Soft as GradioThemeSoft
@@ -2169,6 +2246,9 @@ def create_ui():
     """
 
     with gr.Blocks(title="DuckDB Processor UI") as app:
+        # Survival across theme switches / refreshes
+        app_state = gr.BrowserState(storage_key="duckdb_processor_state_v1")
+
         # States to persistent data for manual charting
         analysis_state = gr.State(None)
         sql_state = gr.State(None)
@@ -2389,9 +2469,9 @@ def create_ui():
             result = load_data(file_obj, header, kv, table_mapping=table_mapping_input, is_dark=False)
             logger.info(f"[LOAD_BTN] Result: type={type(result)}, len={len(result) if hasattr(result, '__len__') else 'N/A'}")
 
-            # Unpack the 9-element tuple from load_data
-            if len(result) == 9:
-                info_msg, preview_df, schema_str, health_fig, health_df, profile_df, progress_update, stats_update, table_dropdown_update = result
+            # Unpack the 10-element tuple from load_data
+            if len(result) == 10:
+                info_msg, preview_df, schema_str, health_fig, health_df, profile_df, progress_update, stats_update, table_dropdown_update, new_state = result
                 logger.info(f"[LOAD_BTN] Info: {info_msg[:50] if info_msg else 'None'}...")
                 return (
                     info_msg,           # info_box
@@ -2402,20 +2482,21 @@ def create_ui():
                     profile_df,         # profile_summary_table
                     progress_update,    # progress_box
                     stats_update,       # exec_stats
-                    table_dropdown_update # table_dropdown
+                    table_dropdown_update, # table_dropdown
+                    new_state           # app_state
                 )
             else:
                 logger.error(f"[LOAD_BTN] Unexpected result length: {len(result)}")
                 # Add missing updates if needed
-                while isinstance(result, tuple) and len(result) < 9:
+                while isinstance(result, tuple) and len(result) < 10:
                     result = result + (gr.update(),)
                 if not isinstance(result, tuple):
-                    result = (gr.update(),) * 9
+                    result = (gr.update(),) * 10
                 return result
 
-        def handle_table_switch(table_name, is_dark=False):
+        def handle_table_switch(table_name, current_state, is_dark=False):
             if not global_processor or not table_name:
-                return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+                return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
             
             try:
                 global_processor.set_active_table(table_name)
@@ -2427,6 +2508,10 @@ def create_ui():
                 schema_str = get_schema_info()
                 health_fig, health_df, profile_df = get_data_profiling(is_dark=is_dark)
                 
+                # Update state
+                if isinstance(current_state, dict):
+                    current_state["active_table"] = table_name
+
                 return (
                     f"✅ Switched to Table: {table_name}\n\n{info_str}",
                     preview_df,
@@ -2434,14 +2519,23 @@ def create_ui():
                     health_fig,
                     health_df,
                     profile_df,
-                    gr.update(value=info_str)
+                    gr.update(value=info_str),
+                    current_state
                 )
             except Exception as e:
                 logger.error(f"Error switching table: {e}")
-                return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+                return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
 
         # Wire up event handlers
         logger.info("[EVENT_SETUP] Wiring up Gradio event handlers...")
+
+        # Survival restoration on load (theme switch / refresh)
+        app.load(
+            fn=restore_session,
+            inputs=[app_state, profile_dark_toggle, sql_dark_toggle],
+            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, exec_stats, table_dropdown, app_state, file_input, header_check, kv_check, table_mapping_input, sql_input]
+        )
+        logger.info("[EVENT_SETUP] ✓ app.load → restore_session")
 
         # File upload → update info box
         file_input.upload(
@@ -2455,14 +2549,14 @@ def create_ui():
         load_btn.click(
             fn=handle_load_click,
             inputs=[file_input, header_check, kv_check, table_mapping_input],
-            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, exec_stats, table_dropdown]
+            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, exec_stats, table_dropdown, app_state]
         )
         logger.info("[EVENT_SETUP] ✓ load_btn.click → handle_load_click")
         
         table_dropdown.change(
             fn=handle_table_switch,
-            inputs=[table_dropdown],
-            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box]
+            inputs=[table_dropdown, app_state, profile_dark_toggle],
+            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, app_state]
         )
 
         logger.info("[EVENT_SETUP] All event handlers wired successfully.")
@@ -2532,11 +2626,18 @@ def create_ui():
         # ============================================================
 
         # Run SQL button handler
-        def handle_run_sql(query, max_rows, max_cols, is_dark):
+        def handle_run_sql(query, max_rows, max_cols, is_dark, current_state):
             """Handle Run Query button click."""
             log_event("run_sql", query, max_rows, max_cols, is_dark)
             logger.info(f"[SQL_BTN] Running query: {query[:100] if query else 'None'}..., dark mode={is_dark}")
-            return execute_sql(query, max_rows, max_cols, is_dark=is_dark)
+            
+            # Update state with the query
+            if isinstance(current_state, dict):
+                current_state["sql_query"] = query
+                
+            res = execute_sql(query, max_rows, max_cols, is_dark=is_dark)
+            # res is a tuple of 11 elements, we append current_state
+            return res + (current_state,)
 
         # Format/Prettify SQL button handler
         def handle_format_sql(query):
@@ -2555,7 +2656,7 @@ def create_ui():
         # Wire up SQL button handlers
         run_sql_btn.click(
             fn=handle_run_sql,
-            inputs=[sql_input, row_slider_sql, col_dropdown_sql, sql_dark_toggle],
+            inputs=[sql_input, row_slider_sql, col_dropdown_sql, sql_dark_toggle, app_state],
             outputs=[
                 sql_status,           # Execution status message
                 sql_results,          # Results dataframe
@@ -2567,7 +2668,8 @@ def create_ui():
                 sql_y_axis,           # Update chart controls
                 sql_color_by,         # Update chart controls
                 sql_facet_by,         # Update chart controls
-                exec_stats            # Execution statistics
+                exec_stats,           # Execution statistics
+                app_state             # Browser state persistence
             ]
         )
         logger.info("[EVENT_SETUP] ✓ run_sql_btn.click → handle_run_sql")
