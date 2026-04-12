@@ -929,16 +929,20 @@ def generate_interactive_html(title, author, sections):
                     parts.append(f"<p>{s.get('body') or ''}</p>")
             if s.get('type') in ["Analyzer Results Table", "SQL Results Table"]:
                 df = s.get('data')
+                logger.info(f"[HTML_GEN] Section {i+1} data check: {df is not None if df is not None else 'None'}")
                 if df is not None:
                     try:
                         logger.info(f"[HTML_GEN] Rendering table for section {i+1}")
+                        # Ensure itables is used correctly
                         parts.append(itables.to_html_datatable(df, scrollX=True, scrollY="400px", paging=True, classes="display nowrap cell-border"))
-                    except Exception:
-                        logger.warning(f"[HTML_GEN] Failed itables rendering for section {i+1}")
+                    except Exception as e:
+                        logger.error(f"[HTML_GEN] Table rendering error in section {i+1}: {e}")
                         try:
                             parts.append(df.head(100).to_html(classes="display nowrap cell-border", index=False))
                         except Exception:
                             parts.append('<p>Failed to render table.</p>')
+                else:
+                    parts.append('<p>No data available for this section.</p>')
 
             parts.append('</section><hr/>')
 
