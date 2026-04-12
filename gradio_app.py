@@ -802,17 +802,21 @@ def add_report_section(sections, s_type, s_heading, s_body):
     """Add a new section to the report list capturing an immutable data snapshot."""
     global global_processor
     if not sections: sections = []
+
     snapshot = None
     try:
         if global_processor and getattr(global_processor, 'last_result', None) is not None:
             snapshot = global_processor.last_result.copy(deep=True)
-    except Exception:
+            logger.info(f"[REPORT_ADD] Captured snapshot for '{s_heading}'. Data shape: {snapshot.shape}")
+        else:
+            logger.warning(f"[REPORT_ADD] No data snapshot available to capture for '{s_heading}'. global_processor.last_result is None.")
+    except Exception as e:
+        logger.error(f"[REPORT_ADD] Failed to capture snapshot: {e}")
         snapshot = None
 
     new_section = {"type": s_type, "heading": s_heading, "body": s_body, "data": snapshot}
     sections.append(new_section)
     return sections, f"✅ Added section: {s_heading}"
-
 def remove_report_section(sections, index):
     """Remove a section by index."""
     if not sections or index < 0 or index >= len(sections):
