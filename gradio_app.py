@@ -2260,17 +2260,27 @@ def create_ui():
             outputs=[report_preview_list]
         )
 
+        def handle_export(fmt, title, author, sections):
+            if not sections:
+                gr.Warning("Report is empty. Please add sections first.")
+                return gr.update(visible=False)
+            path = export_report_file(fmt, title, author, sections)
+            if not path:
+                gr.Error("Failed to generate report.")
+                return gr.update(visible=False)
+            return gr.update(visible=True, value=path)
+
         gen_md_btn.click(
-            fn=lambda t, a, s: export_report_file('md', t, a, s),
-            inputs=[report_title, report_author, report_sections_state],
+            fn=handle_export,
+            inputs=[gr.State('md'), report_title, report_author, report_sections_state],
             outputs=[report_output_file]
-        ).then(lambda p: gr.update(visible=True, value=p), inputs=[report_output_file], outputs=[report_output_file])
+        )
 
         gen_html_btn.click(
-            fn=lambda t, a, s: export_report_file('html', t, a, s),
-            inputs=[report_title, report_author, report_sections_state],
+            fn=handle_export,
+            inputs=[gr.State('html'), report_title, report_author, report_sections_state],
             outputs=[report_output_file]
-        ).then(lambda p: gr.update(visible=True, value=p), inputs=[report_output_file], outputs=[report_output_file])
+        )
 
         # Plugin Studio Handlers
         test_plugin_btn.click(
