@@ -669,9 +669,14 @@ def execute_sql(query, max_rows, max_cols, progress=gr.Progress()):
         gr.Warning("SQL query is empty.")
         return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
 
-    # Auto-fix: DuckDB 1.x backtick handling
+    # Auto-fix: DuckDB 1.x backtick handling and remove SQL comments
     if "`" in query:
         query = query.replace("`", '"')
+    
+    # Remove SQL comments to avoid parsing errors in generated chart queries
+    query = re.sub(r'--.*', '', query)
+    query = re.sub(r'/\*.*?\*/', '', query, flags=re.DOTALL)
+    query = query.strip()
 
     try:
         progress(0.2, desc="Executing DuckDB query...")
