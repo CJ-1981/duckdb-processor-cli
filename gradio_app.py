@@ -1758,8 +1758,8 @@ def create_ui():
                                     label="Table Data",
                                     interactive=False,
                                     wrap=True,
-                                    row_count=(10, "dynamic"),
-                                    max_height=400  # Limit height to prevent large white space
+                                    row_count=(25, "dynamic"),
+                                    max_height=800
                                 )
 
                             # Sub-tab 1.2: Data Profiling
@@ -1844,7 +1844,7 @@ def create_ui():
                                     interactive=False,
                                     wrap=True,
                                     elem_id="sql-results",
-                                    max_height=500
+                                    max_height=800
                                 )
                                 sql_css_override = gr.HTML("")
 
@@ -1896,7 +1896,7 @@ def create_ui():
                                     label="Result Data",
                                     interactive=False,
                                     wrap=True,
-                                    max_height=500
+                                    max_height=800
                                 )
                                 analysis_css_override = gr.HTML("")
 
