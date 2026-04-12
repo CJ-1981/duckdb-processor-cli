@@ -1913,11 +1913,12 @@ def create_ui():
                             gen_html_btn = gr.Button("🌐 Generate Interactive HTML", variant="primary")
 
                             report_output_file = gr.File(
-                            label="Download Generated Report",
+                            label="Download Generated Report(s)",
                             interactive=False,
                             visible=False,
                             show_label=True,
-                            container=True
+                            container=True,
+                            file_count="multiple"
                             )
                             gr.Markdown("*Click the download button above to save your generated report file.*", visible=False)
                             report_md_preview = gr.Markdown(visible=False)
@@ -2260,7 +2261,7 @@ def create_ui():
             outputs=[report_preview_list]
         )
 
-        def handle_export(fmt, title, author, sections):
+        def handle_export(fmt, title, author, sections, current_files):
             if not sections:
                 gr.Warning("Report is empty. Please add sections first.")
                 return gr.update(visible=False)
@@ -2268,17 +2269,22 @@ def create_ui():
             if not path:
                 gr.Error("Failed to generate report.")
                 return gr.update(visible=False)
-            return gr.update(visible=True, value=path)
+            
+            # If current_files exists, append the new path
+            new_files = current_files if isinstance(current_files, list) else ([current_files] if current_files else [])
+            new_files.append(path)
+            
+            return gr.update(visible=True, value=new_files)
 
         gen_md_btn.click(
             fn=handle_export,
-            inputs=[gr.State('md'), report_title, report_author, report_sections_state],
+            inputs=[gr.State('md'), report_title, report_author, report_sections_state, report_output_file],
             outputs=[report_output_file]
         )
 
         gen_html_btn.click(
             fn=handle_export,
-            inputs=[gr.State('html'), report_title, report_author, report_sections_state],
+            inputs=[gr.State('html'), report_title, report_author, report_sections_state, report_output_file],
             outputs=[report_output_file]
         )
 
