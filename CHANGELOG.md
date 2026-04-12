@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Native Gradio Plotting** - Replaced Plotly with native `gr.BarPlot`, `gr.LinePlot`, and `gr.ScatterPlot` for automatic theme synchronization and better performance.
 - **UI Persistence across Theme Switches** - Implemented `gr.BrowserState` to prevent data loss when switching between light and dark mode in the Gradio app.
 - **Multi-input file support** - Load multiple CSV files simultaneously for joining and cross-analysis.
 - **Table name mapping** - Support for `file.csv:table_name` syntax in CLI and a new mapping text box in Gradio UI.

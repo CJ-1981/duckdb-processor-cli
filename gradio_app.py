@@ -1824,10 +1824,6 @@ def create_ui():
                                 sql_scatter_display = gr.ScatterPlot(label="SQL Scatter Chart", visible=False)
 
                     # -----------------------------
-                    # TAB 3: Progress Monitoring
-                    # -----------------------------
-                    
-                    # -----------------------------
                     # TAB 3: Advanced Analytics
                     # -----------------------------
                     with gr.Tab("Advanced Analytics"):
