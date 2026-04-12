@@ -999,12 +999,8 @@ def export_report_file(fmt, title, author, sections):
     try:
         path = None
         if fmt == "md":
-            content = generate_report_markdown(title, author, sections)
-            filename = f"duck_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-            path = os.path.abspath(filename)
-            with open(path, "w", encoding='utf-8') as f:
-                f.write(content)
-            logger.info(f"[REPORT] Markdown file saved to: {path}")
+            path = generate_report_markdown(title, author, sections)
+            logger.info(f"[REPORT] Markdown file generated at: {path}")
             return path
         elif fmt == "html":
             logger.info("[REPORT] Calling generate_interactive_html")
