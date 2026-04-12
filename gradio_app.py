@@ -198,6 +198,15 @@ execution_stats = {
     "errors": 0
 }
 
+def log_event(event_name, *args, **kwargs):
+    """Log Gradio events for debugging."""
+    logger.info(f"[EVENT] {event_name} triggered")
+    if args and args[0] is not None:
+        try:
+            logger.debug(f"  First arg: {str(args[0])[:100]}")
+        except:
+            pass
+
 def get_schema_info():
     """Fetch schema as a string for display."""
     global global_processor
@@ -455,7 +464,8 @@ def load_data(file_objs, header, kv, table_mapping="", progress=gr.Progress()):
                 tables = global_processor.get_tables()
                 for t in tables:
                     global_processor.con.execute(f'DROP TABLE IF EXISTS "{t}"')
-                global_processor.con.execute("PRAGMA shrink_memory;")
+                # Use execute for pragma
+                global_processor.con.execute("PRAGMA shrink_memory")
                 logger.info("Cleared previous session memory.")
             except Exception as e:
                 logger.warning(f"Cleanup failed: {e}")
@@ -1350,11 +1360,15 @@ def restore_session(state):
                     res_list[0] = f"✅ Session Restored: Table {active_table}\n\n{info_str}"
                     res_list[1] = preview_df
                     res_list[2] = schema_str
-                    res_list[3] = health_df # For gr.BarPlot
+                    res_list[3] = gr.update(value=health_df) # For gr.BarPlot
                     res_list[4] = health_df
                     res_list[5] = profile_df
                     res_list[6] = gr.update(value=info_str)
-                    res_list[8] = gr.update(value=active_table)
+                    
+                    # Merge choices with the recovered active_table value
+                    tables = global_processor.get_tables()
+                    res_list[8] = gr.update(choices=tables, value=active_table, visible=True)
+                    
                     res = tuple(res_list)
                 except Exception as e:
                     logger.warning(f"[RECOVERY] Failed to restore active table '{active_table}': {e}")
@@ -1818,10 +1832,12 @@ def create_ui():
         # ============================================================
 
         def handle_file_upload(file_obj):
+            log_event("file_upload", file_obj)
             if file_obj is None: return gr.update(), "⚠️ No file selected."
             return gr.update(), f"✅ File ready. Click 'Load Data' to process."
 
         def handle_load_click(file_obj, header, kv, table_mapping_input):
+            log_event("load_click", file_obj, header, kv)
             result = load_data(file_obj, header, kv, table_mapping=table_mapping_input)
             if len(result) == 10:
                 # info_msg, preview_df, schema_str, health_bar, health_df, profile_df, progress_update, stats_update, table_dropdown_update, new_state
@@ -1829,6 +1845,7 @@ def create_ui():
             return [gr.update()] * 10
 
         def handle_table_switch(table_name, current_state):
+            log_event("table_switch", table_name)
             if not global_processor or not table_name:
                 return [gr.update()] * 8
             try:
@@ -2010,6 +2027,7 @@ def create_ui():
         # Manual chart controls - regenerate chart when parameters change
         def handle_manual_chart_params(chart_type, x_col, y_col, color_col, facet_col, show_trend, df):
             """Handle manual chart parameter changes."""
+            log_event("chart_params_change", chart_type, x_col, y_col)
             return get_chart_updates(df, chart_type, x_col, y_col, color_col, facet_col, show_trend)
 
         # Wire up manual chart controls
