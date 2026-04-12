@@ -2315,14 +2315,14 @@ def create_ui():
             fn=handle_export,
             inputs=[gr.State('md'), report_title, report_author, report_sections_state, report_output_file],
             outputs=[report_output_file],
-            show_progress="minimal"
+            show_progress="hidden"
         )
 
         gen_html_btn.click(
             fn=handle_export,
             inputs=[gr.State('html'), report_title, report_author, report_sections_state, report_output_file],
             outputs=[report_output_file],
-            show_progress="minimal"
+            show_progress="hidden"
         )
 
         # Plugin Studio Handlers
