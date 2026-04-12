@@ -896,22 +896,20 @@ def generate_report_markdown(title, author, sections, include_summary=True, incl
     return md
 
 def generate_interactive_html(title, author, sections):
-    """Generate an interactive HTML report using mistletoe (markdown) + itables for tables.
-
-    Saves a standalone HTML file in TEMP_DIR and returns the file path.
-    """
+    """Generate an interactive HTML report using markdown + itables for tables."""
     global TEMP_DIR
+    logger.info(f"[HTML_GEN] Starting generation for {len(sections)} sections")
     if not sections:
         raise gr.Error("No sections provided for report generation.")
 
     try:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = os.path.join(TEMP_DIR, f"duck_report_{timestamp}.html")
+        logger.info(f"[HTML_GEN] File path: {filename}")
 
         parts = []
         parts.append("<!doctype html><html><head><meta charset='utf-8'/>")
         parts.append(f"<title>{title or 'DuckDB Interactive Report'}</title>")
-        # DataTables CDN + minimal aesthetic CSS (DataGrip-like)
         parts.append('<link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/jquery.dataTables.min.css"/>')
         parts.append("<style>body{font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial;margin:20px;background:#0f172a;color:#e6eef8} h1,h2{color:#c7d2fe} .container{max-width:1200px;margin:auto} table.dataTable{width:100% !important;background:#071026;border-collapse:collapse} table.dataTable thead th{background:#07162a;color:#e6eef8} .dt-buttons{margin-bottom:8px}</style>")
         parts.append('<script src="https://code.jquery.com/jquery-3.5.1.js"></script>')
@@ -920,7 +918,8 @@ def generate_interactive_html(title, author, sections):
         parts.append(f"<h1>{title or 'DuckDB Interactive Report'}</h1>")
         parts.append(f"<p><strong>Author:</strong> {author or 'Anonymous'} — <em>{get_report_timestamp()}</em></p><hr/>")
 
-        for s in sections:
+        for i, s in enumerate(sections):
+            logger.info(f"[HTML_GEN] Processing section {i+1}: {s.get('heading')}")
             parts.append(f"<section><h2>{s.get('heading','')}</h2>")
             if s.get('body'):
                 try:
@@ -931,9 +930,10 @@ def generate_interactive_html(title, author, sections):
                 df = s.get('data')
                 if df is not None:
                     try:
-                        # Prefer itables rendering; fallback to simple HTML table if it fails
+                        logger.info(f"[HTML_GEN] Rendering table for section {i+1}")
                         parts.append(itables.to_html_datatable(df, scrollX=True, scrollY="400px", paging=True, classes="display nowrap cell-border"))
                     except Exception:
+                        logger.warning(f"[HTML_GEN] Failed itables rendering for section {i+1}")
                         try:
                             parts.append(df.head(100).to_html(classes="display nowrap cell-border", index=False))
                         except Exception:
@@ -948,14 +948,16 @@ def generate_interactive_html(title, author, sections):
         html = "\n".join(parts)
         with open(filename, 'w', encoding='utf-8') as f:
             f.write(html)
+        logger.info("[HTML_GEN] File saved successfully")
 
         return filename
     except Exception as e:
-        logger.error(f"Interactive HTML generation failed: {e}")
+        logger.error(f"[HTML_GEN] Failed: {e}", exc_info=True)
         raise gr.Error(f"Failed to generate HTML report: {e}")
 
 def export_report_file(fmt, title, author, sections):
     """Dispatcher for exporting the report."""
+    logger.info(f"[REPORT] Export starting for format={fmt}")
     if not sections:
         return None
 
@@ -966,13 +968,16 @@ def export_report_file(fmt, title, author, sections):
             path = os.path.abspath(filename)
             with open(path, "w", encoding='utf-8') as f:
                 f.write(content)
+            logger.info(f"[REPORT] Markdown file saved to: {path}")
             return path
         elif fmt == "html":
             # Use interactive HTML generator
+            logger.info("[REPORT] Calling generate_interactive_html")
             path = generate_interactive_html(title, author, sections)
+            logger.info(f"[REPORT] HTML file generated at: {path}")
             return os.path.abspath(path)
     except Exception as e:
-        logger.error(f"Report export error: {e}")
+        logger.error(f"Report export error: {e}", exc_info=True)
         return None
     return None
 
