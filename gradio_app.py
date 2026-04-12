@@ -1429,11 +1429,7 @@ def restore_session(state):
     return [gr.update()] * 16
 
 
-def add_report_section(sections, stype, heading, body):
-    """Add a new section to the report state."""
-    new_section = {"type": stype, "heading": heading, "body": body}
-    sections.append(new_section)
-    return sections, f"✅ Added section: {heading}"
+# (Lines 1432-1436 was a redundant duplicate, now removed)
 
 def render_sections_view(sections):
     """Return HTML representation of sections for preview."""
