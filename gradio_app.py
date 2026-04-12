@@ -18,6 +18,7 @@ import atexit
 import re
 from fpdf import FPDF
 import itables
+import markdown
 
 # Set up detailed logging for debugging file loading issues
 logging.basicConfig(
@@ -923,10 +924,9 @@ def generate_interactive_html(title, author, sections):
             parts.append(f"<section><h2>{s.get('heading','')}</h2>")
             if s.get('body'):
                 try:
-                    parts.append(mistletoe.markdown(s.get('body') or ""))
+                    parts.append(markdown.markdown(s.get('body') or ""))
                 except Exception:
                     parts.append(f"<p>{s.get('body') or ''}</p>")
-
             if s.get('type') in ["Analyzer Results Table", "SQL Results Table"]:
                 df = s.get('data')
                 if df is not None:
