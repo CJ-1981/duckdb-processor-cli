@@ -1455,12 +1455,14 @@ def clear_report_sections():
 
 def generate_report_markdown(title, author, sections):
     """Generate a Markdown file from report sections."""
+    logger.info(f"[MD_GEN] Starting generation for {len(sections)} sections")
     if not sections:
         raise gr.Error("Cannot generate empty report.")
-    
+
     md = f"# {title}\n\n**Author:** {author}\n**Date:** {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n---\n\n"
-    
-    for s in sections:
+
+    for i, s in enumerate(sections):
+        logger.info(f"[MD_GEN] Processing section {i+1}: {s.get('heading')}")
         md += f"## {s['heading']}\n\n"
         if s['type'] == "Text/Note":
             md += f"{s['body']}\n\n"
@@ -1470,13 +1472,19 @@ def generate_report_markdown(title, author, sections):
             info = global_processor.info() if global_processor else {}
             md += f"- **Total Rows:** {info.get('rows', '?')}\n- **Total Columns:** {len(info.get('columns', []))}\n\n"
         else:
-            md += "_[Table data omitted in Markdown preview]_\n\n"
-            
+            logger.info(f"[MD_GEN] Processing table data for section {i+1}")
+            df = s.get('data')
+            if df is not None:
+                md += f"```csv\n{df.to_csv(index=False)}\n```\n\n"
+            else:
+                md += "_[Table data missing]_\n\n"
+
     path = os.path.join(TEMP_DIR, f"report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.md")
+    logger.info(f"[MD_GEN] Saving to {path}")
     with open(path, "w") as f:
         f.write(md)
+    logger.info("[MD_GEN] Saved successfully")
     return path
-
 def test_analyzer_plugin(code):
     """Execute a plugin's code in a sandbox-like environment for testing."""
     if not code:
