@@ -724,7 +724,7 @@ def execute_sql(query, max_rows, max_cols, progress=gr.Progress()):
             gr.update(value=selected_type),          # Update chart type dropdown
             df,                                      # For gr.State
             gr.update(choices=cols, value=cols[0]),  # X-Axis
-            gr.update(choices=cols, value=cols[1] if len(cols) > 1 else None), # Y-Axis
+            gr.update(choices=cols, value=cols[1] if len(cols) > 1 else cols[0]), # Y-Axis: Fallback to cols[0] if only 1 column
             gr.update(choices=choices_with_none, value=None), # Color By
             gr.update(choices=choices_with_none, value=None),  # Facet By
             gr.update(value=stats_text)  # Execution statistics
