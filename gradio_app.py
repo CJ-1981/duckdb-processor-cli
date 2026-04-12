@@ -237,8 +237,8 @@ def get_data_profiling():
         # Use DuckDB SUMMARIZE but round numeric statistics inside SQL so no Pandas numeric coercion is needed
         summary_sql = f'''
         SELECT
-            "column",
-            "type",
+            column_name AS "column",
+            column_type AS "type",
             "count",
             "null_count",
             ROUND(TRY_CAST("min" AS DOUBLE), 2) AS "min",
@@ -675,9 +675,12 @@ def execute_sql(query, max_rows, max_cols, progress=gr.Progress()):
         query = query.replace("`", '"')
     
     # Remove SQL comments to avoid parsing errors in generated chart queries
-    query = re.sub(r'--.*', '', query)
+    # Use a pattern that respects single quotes to avoid breaking literal strings
+    query = re.sub(r"(--.*?(?=(?:'[^']*'[^']*')*[^']*$))", "", query)
     query = re.sub(r'/\*.*?\*/', '', query, flags=re.DOTALL)
     query = query.strip()
+    if query.endswith(';'):
+        query = query[:-1]
 
     try:
         progress(0.2, desc="Executing DuckDB query...")
