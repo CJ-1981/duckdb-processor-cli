@@ -959,6 +959,10 @@ def generate_interactive_html(title, author, sections):
 def export_report_file(fmt, title, author, sections):
     """Dispatcher for exporting the report."""
     logger.info(f"[REPORT] Export starting for format={fmt}")
+    logger.info(f"[REPORT] Received {len(sections)} sections.")
+    for i, s in enumerate(sections):
+        logger.info(f"[REPORT] Section {i+1}: Type={s.get('type')}, Heading={s.get('heading')}, DataPresent={s.get('data') is not None}")
+    
     if not sections:
         return None
 
