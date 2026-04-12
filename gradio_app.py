@@ -1495,8 +1495,9 @@ def generate_report_markdown(title, author, sections):
     md = f"# {title}\n\n**Author:** {author}\n**Date:** {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n---\n\n"
 
     for i, s in enumerate(sections):
-        logger.info(f"[MD_GEN] Processing section {i+1}: {s.get('heading')}")
-        md += f"## {s['heading']}\n\n"
+        heading = s.get('heading') or f"Section {i+1}"
+        logger.info(f"[MD_GEN] Processing section {i+1}: {heading}")
+        md += f"## {heading}\n\n"
         
         if s.get('type') == "Text/Note":
             md += f"{s.get('body', '')}\n\n"
