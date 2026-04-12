@@ -53,7 +53,10 @@ def test_markdown_generation(mock_processor):
         {"type": "Text/Note", "heading": "Intro", "body": "My notes"},
         {"type": "Data Summary", "heading": "Stats", "body": ""}
     ]
-    md = generate_report_markdown("Test Report", "Tester", sections)
+    md_path = generate_report_markdown("Test Report", "Tester", sections)
+    
+    with open(md_path, "r") as f:
+        md = f.read()
     
     assert "# Test Report" in md
     assert "**Author:** Tester" in md
@@ -62,6 +65,9 @@ def test_markdown_generation(mock_processor):
     assert "## Stats" in md
     # Data summary should be rendered since mock_processor is active
     assert "- **Total Rows:** 2" in md
+    
+    if os.path.exists(md_path):
+        os.remove(md_path)
 
 def test_pdf_generation(mock_processor, tmp_path):
     sections = [
