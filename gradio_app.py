@@ -1794,6 +1794,110 @@ def create_ui():
                     # -----------------------------
                     # TAB 3: Progress Monitoring
                     # -----------------------------
+                    
+                    # -----------------------------
+                    # TAB 3: Advanced Analytics
+                    # -----------------------------
+                    with gr.Tab("Advanced Analytics"):
+                        gr.Markdown("### Pre-built Analysis Modules")
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                analyzer_dropdown = gr.Dropdown(
+                                    choices=get_analyzer_choices(),
+                                    label="Select Analyzer",
+                                    info="Choose a specialized analysis module"
+                                )
+                                run_analysis_btn = gr.Button("🚀 Run Analysis", variant="primary")
+                            
+                            with gr.Column(scale=1):
+                                with gr.Accordion("⚙️ Analysis Options", open=False):
+                                    row_slider_ana = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows to Preview")
+                                    col_dropdown_ana = gr.Dropdown(choices=["5", "10", "20", "50", "All"], value="All", label="Columns")
+
+                        with gr.Tabs():
+                            with gr.Tab("📊 Analysis Results"):
+                                analysis_results = gr.Dataframe(
+                                    label="Result Data",
+                                    interactive=False,
+                                    wrap=True,
+                                    max_height=500
+                                )
+                                analysis_css_override = gr.HTML("")
+
+                            with gr.Tab("📈 Visualizer"):
+                                ana_bar_display = gr.BarPlot(label="Analysis Bar Chart", visible=True)
+                                ana_line_display = gr.LinePlot(label="Analysis Line Chart", visible=False)
+                                ana_scatter_display = gr.ScatterPlot(label="Analysis Scatter Chart", visible=False)
+
+                    
+                    # -----------------------------
+                    # TAB 4: Report Builder
+                    # -----------------------------
+                    with gr.Tab("Report Builder"):
+                        gr.Markdown("### Multi-Section Analysis Report")
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                report_title = gr.Textbox(label="Report Title", value="DuckDB Analysis Report")
+                                report_author = gr.Textbox(label="Author Name", value="Analyst")
+                                
+                                with gr.Row():
+                                    report_section_heading = gr.Textbox(label="Section Heading", placeholder="e.g., Sales Summary")
+                                    report_section_type = gr.Dropdown(
+                                        choices=["Analyzer Results Table", "SQL Results Table", "Schema Info", "Text/Note"],
+                                        value="Analyzer Results Table",
+                                        label="Section Type"
+                                    )
+                                
+                                report_section_body = gr.Textbox(label="Text/Note Content (Optional)", lines=3, visible=False)
+                                
+                                def toggle_note_visibility(stype):
+                                    return gr.update(visible=(stype == "Text/Note"))
+                                
+                                report_section_type.change(toggle_note_visibility, [report_section_type], [report_section_body])
+                                
+                                with gr.Row():
+                                    add_section_btn = gr.Button("➕ Add Section", variant="secondary")
+                                    clear_report_btn = gr.Button("🗑️ Clear All", variant="stop")
+                                
+                            with gr.Column(scale=1):
+                                gr.Markdown("#### Report Structure")
+                                report_preview_list = gr.HTML(
+                                    value="<div class='report-section-list'>No sections added yet.</div>"
+                                )
+                                
+                        gr.Markdown("---")
+                        with gr.Row():
+                            gen_md_btn = gr.Button("📝 Generate Markdown", variant="primary")
+                            gen_pdf_btn = gr.Button("📕 Generate PDF", variant="primary")
+                        
+                        report_output_file = gr.File(label="Download Generated Report", visible=False)
+                        report_md_preview = gr.Markdown(visible=False)
+
+                    # -----------------------------
+                    # TAB 5: Plugin Studio
+                    # -----------------------------
+                    with gr.Tab("Plugin Studio"):
+                        gr.Markdown("### Dynamic Plugin Development")
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                plugin_editor = gr.Code(
+                                    label="Python Plugin Editor",
+                                    language="python",
+                                    lines=20,
+                                    value=PLUGIN_TEMPLATE
+                                )
+                                with gr.Row():
+                                    test_plugin_btn = gr.Button("🧪 Test Plugin (Dry Run)", variant="secondary")
+                                    new_plugin_btn = gr.Button("📄 New Template")
+                                
+                            with gr.Column(scale=1):
+                                gr.Markdown("#### Plugin Management")
+                                plugin_status = gr.Textbox(label="Status", interactive=False)
+                                plugin_logs = gr.Code(label="Console Output", language="python", lines=15)
+                                
+                        gr.Markdown("#### Test Results")
+                        plugin_results_table = gr.Dataframe(label="Plugin Results Table", visible=False)
+
                     with gr.Tab("Progress Monitoring"):
                         gr.Markdown("### Execution Status & Progress")
 
@@ -2042,6 +2146,63 @@ def create_ui():
         sql_show_trend.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
 
         
+        
+        # Analyzer Button Handler
+        run_analysis_btn.click(
+            fn=run_analysis,
+            inputs=[analyzer_dropdown, row_slider_ana, col_dropdown_ana],
+            outputs=[
+                analysis_results,
+                analysis_css_override,
+                ana_bar_display,
+                ana_line_display,
+                ana_scatter_display,
+                analysis_state,
+                sql_x_axis,
+                sql_y_axis,
+                sql_color_by,
+                sql_facet_by
+            ]
+        )
+
+        # Report Builder Handlers
+        add_section_btn.click(
+            fn=add_report_section,
+            inputs=[report_sections_state, report_section_type, report_section_heading, report_section_body],
+            outputs=[report_sections_state, progress_box]
+        ).then(
+            fn=render_sections_view,
+            inputs=[report_sections_state],
+            outputs=[report_preview_list]
+        )
+
+        clear_report_btn.click(
+            fn=clear_report_sections,
+            outputs=[report_sections_state, progress_box]
+        ).then(
+            fn=render_sections_view,
+            inputs=[report_sections_state],
+            outputs=[report_preview_list]
+        )
+
+        gen_md_btn.click(
+            fn=lambda t, a, s: generate_report_markdown(t, a, s),
+            inputs=[report_title, report_author, report_sections_state],
+            outputs=[report_output_file]
+        ).then(lambda p: gr.update(visible=True, value=p), inputs=[report_output_file], outputs=[report_output_file])
+
+        # Plugin Studio Handlers
+        test_plugin_btn.click(
+            fn=test_analyzer_plugin,
+            inputs=[plugin_editor],
+            outputs=[plugin_status, plugin_results_table, plugin_logs]
+        ).then(lambda df: gr.update(visible=df is not None), inputs=[plugin_results_table], outputs=[plugin_results_table])
+
+        new_plugin_btn.click(
+            fn=create_new_plugin_template,
+            outputs=[plugin_editor, save_pattern_name, plugin_status]
+        )
+
         logger.info("[EVENT_SETUP] All event handlers wired successfully.")
 
     # Return the app object, theme, custom_css, and keyboard shortcuts JS for testing
