@@ -951,7 +951,19 @@ def generate_interactive_html(title, author, sections):
             parts.append('</section><hr/>')
 
         parts.append('</div>')
-        parts.append('<script>$(document).ready(function(){$(".display").DataTable({scrollX:true,scrollY:"400px"});});</script>')
+        parts.append('''
+<script>
+$(document).ready(function(){
+    $(".display").each(function() {
+        if (!$.fn.DataTable.isDataTable(this)) {
+            $(this).DataTable({
+                scrollX: true,
+                scrollY: "400px"
+            });
+        }
+    });
+});
+</script>''')
         parts.append('</body></html>')
 
         html = "\n".join(parts)
