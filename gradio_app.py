@@ -991,8 +991,7 @@ def export_report_file(fmt, title, author, sections):
     """Dispatcher for exporting the report."""
     logger.info(f"[REPORT] Export starting for format={fmt}")
     logger.info(f"[REPORT] Received {len(sections)} sections.")
-    # ... existing logging ...
-
+    
     if not sections:
         return None
 
@@ -1001,12 +1000,16 @@ def export_report_file(fmt, title, author, sections):
         if fmt == "md":
             path = generate_report_markdown(title, author, sections)
             logger.info(f"[REPORT] Markdown file generated at: {path}")
-            return path
         elif fmt == "html":
             logger.info("[REPORT] Calling generate_interactive_html")
             path = generate_interactive_html(title, author, sections)
             logger.info(f"[REPORT] HTML file generated at: {path}")
-            return os.path.abspath(path)
+            path = os.path.abspath(path)
+        
+        # Cleanup
+        gc.collect()
+        logger.info(f"[REPORT] Returning final path: {path}")
+        return path
     except Exception as e:
         logger.error(f"Report export error: {e}", exc_info=True)
         gc.collect()
