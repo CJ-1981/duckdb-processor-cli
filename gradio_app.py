@@ -1897,10 +1897,16 @@ def create_ui():
                         with gr.Row():
                             gen_md_btn = gr.Button("📝 Generate Markdown", variant="primary")
                             gen_html_btn = gr.Button("🌐 Generate Interactive HTML", variant="primary")
-                        
-                        report_output_file = gr.File(label="Download Generated Report", visible=False)
-                        report_md_preview = gr.Markdown(visible=False)
 
+                            report_output_file = gr.File(
+                            label="Download Generated Report",
+                            interactive=False,
+                            visible=False,
+                            show_label=True,
+                            container=True
+                            )
+                            gr.Markdown("*Click the download button above to save your generated report file.*", visible=False)
+                            report_md_preview = gr.Markdown(visible=False)
                     # -----------------------------
                     # TAB 5: Plugin Studio
                     # -----------------------------
