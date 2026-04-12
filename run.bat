@@ -57,6 +57,7 @@ REM Ensure pip is up to date and install all dependencies in one pass
 echo [INFO] Updating dependencies...
 "%PYTHON_EXE%" -m pip install --quiet --upgrade pip setuptools wheel
 "%PYTHON_EXE%" -m pip install --quiet -e ".[ui,export]"
+"%PYTHON_EXE%" -m pip install --quiet mistletoe itables
 
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Failed to install dependencies
