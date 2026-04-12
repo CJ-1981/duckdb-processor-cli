@@ -984,17 +984,20 @@ $(document).ready(function(){
         logger.error(f"[HTML_GEN] Failed: {e}", exc_info=True)
         raise gr.Error(f"Failed to generate HTML report: {e}")
 
+import gc
+# ... existing imports
+
 def export_report_file(fmt, title, author, sections):
     """Dispatcher for exporting the report."""
     logger.info(f"[REPORT] Export starting for format={fmt}")
     logger.info(f"[REPORT] Received {len(sections)} sections.")
-    for i, s in enumerate(sections):
-        logger.info(f"[REPORT] Section {i+1}: Type={s.get('type')}, Heading={s.get('heading')}, DataPresent={s.get('data') is not None}")
-    
+    # ... existing logging ...
+
     if not sections:
         return None
 
     try:
+        path = None
         if fmt == "md":
             content = generate_report_markdown(title, author, sections)
             filename = f"duck_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
@@ -1002,17 +1005,19 @@ def export_report_file(fmt, title, author, sections):
             with open(path, "w", encoding='utf-8') as f:
                 f.write(content)
             logger.info(f"[REPORT] Markdown file saved to: {path}")
-            return path
         elif fmt == "html":
-            # Use interactive HTML generator
             logger.info("[REPORT] Calling generate_interactive_html")
             path = generate_interactive_html(title, author, sections)
             logger.info(f"[REPORT] HTML file generated at: {path}")
-            return os.path.abspath(path)
+            path = os.path.abspath(path)
+        
+        # Cleanup
+        gc.collect()
+        return path
     except Exception as e:
         logger.error(f"Report export error: {e}", exc_info=True)
+        gc.collect()
         return None
-    return None
 
 def apply_report_template(template_name):
     """Load sections from a chosen template."""
