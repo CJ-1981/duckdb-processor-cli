@@ -1508,7 +1508,8 @@ def generate_report_markdown(title, author, sections):
             else:
                 md += "_[Table data missing]_\n\n"
         else:
-            md += "_[Unknown section type]_\n\n"
+            logger.warning(f"[MD_GEN] Section {i+1} has unknown or unhandled type: {s.get('type')}")
+            md += f"_[Unhandled section type: {s.get('type')}]_\n\n"
 
     path = os.path.join(TEMP_DIR, f"report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.md")
     logger.info(f"[MD_GEN] Saving to {path}")
