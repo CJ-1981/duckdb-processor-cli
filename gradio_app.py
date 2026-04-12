@@ -1638,7 +1638,11 @@ def create_ui():
                     header_check = gr.Checkbox(label="Has Header?", value=True)
                     kv_check = gr.Checkbox(label="Is Key-Value Pairs?", value=False)
                     
-                table_mapping_input = gr.Textbox(label="Table Names Mapping (comma-separated)", placeholder="e.g. table1, table2", info="Optional. Matches the order of uploaded files.")
+                table_mapping_input = gr.Textbox(
+                    label="Table Names Mapping (comma-separated)", 
+                    placeholder="e.g. sales, users, products", 
+                    info="Optional. Maps custom names to your files in order. Default is the sanitized filename stem."
+                )
 
                 table_dropdown = gr.Dropdown(label="Active Table (Navigation)", choices=[], interactive=True, visible=False)
                 load_btn = gr.Button("Load Data", variant="primary", elem_classes=["btn-load"], elem_id="load_btn")
