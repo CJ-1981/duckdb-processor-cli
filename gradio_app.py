@@ -438,6 +438,7 @@ def get_chart_updates(df, chart_type, x_axis, y_axis, color_by=None, facet_by=No
                     y_axis = 'count'
 
                 bar_upd = gr.update(value=df_plot, x='x' if 'x' in df_plot.columns else x_axis, y=y_axis, visible=True, title=f"{y_axis} by {x_axis}")
+                # Return choices as well to update dropdowns correctly
                 return bar_upd, hide, hide
 
         # Chart-specific rendering using SQL aggregations when possible
