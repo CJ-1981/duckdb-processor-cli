@@ -927,25 +927,32 @@ def generate_interactive_html(title, author, sections):
         for i, s in enumerate(sections):
             logger.info(f"[HTML_GEN] Processing section {i+1}: {s.get('heading')}")
             parts.append(f"<section><h2>{s.get('heading','')}</h2>")
-            if s.get('body'):
-                try:
-                    parts.append(markdown.markdown(s.get('body') or ""))
-                except Exception:
-                    parts.append(f"<p>{s.get('body') or ''}</p>")
-            if s.get('type') in ["Analyzer Results Table", "SQL Results Table"]:
+            
+            # Handle Text/Note
+            if s.get('type') == "Text/Note":
+                body = s.get('body') or ""
+                parts.append(markdown.markdown(body))
+            
+            # Handle Schema Info
+            elif s.get('type') == "Schema Info":
+                parts.append(f"<pre><code>{get_schema_info()}</code></pre>")
+            
+            # Handle Data Summary
+            elif s.get('type') == "Data Summary":
+                info = global_processor.info() if global_processor else {}
+                parts.append(f"<p>Total Rows: {info.get('rows', '?')}<br>Total Columns: {len(info.get('columns', []))}</p>")
+            
+            # Handle Tables
+            elif s.get('type') in ["Analyzer Results Table", "SQL Results Table"]:
                 df = s.get('data')
-                logger.info(f"[HTML_GEN] Section {i+1} data check: {df is not None if df is not None else 'None'}")
+                logger.info(f"[HTML_GEN] Section {i+1} data check: {df is not None}")
                 if df is not None:
                     try:
                         logger.info(f"[HTML_GEN] Rendering table for section {i+1}")
-                        # Ensure itables is used correctly
                         parts.append(itables.to_html_datatable(df, scrollX=True, scrollY="400px", paging=True, classes="display nowrap cell-border"))
                     except Exception as e:
                         logger.error(f"[HTML_GEN] Table rendering error in section {i+1}: {e}")
-                        try:
-                            parts.append(df.head(100).to_html(classes="display nowrap cell-border", index=False))
-                        except Exception:
-                            parts.append('<p>Failed to render table.</p>')
+                        parts.append(df.head(100).to_html(classes="display nowrap cell-border", index=False))
                 else:
                     parts.append('<p>No data available for this section.</p>')
 
