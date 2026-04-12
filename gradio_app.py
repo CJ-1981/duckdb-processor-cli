@@ -15,7 +15,8 @@ import logging
 import traceback
 import datetime
 import atexit
-import mistletoe
+import re
+from fpdf import FPDF
 import itables
 
 # Set up detailed logging for debugging file loading issues
@@ -1018,7 +1019,6 @@ def load_plugin_code(plugin_choice):
             
         # Extract name for the plugin_name field
         # Simple heuristic: look for name = "..."
-        import re
         name_match = re.search(r'name\s*=\s*["\']([^"\']+)["\']', code)
         plugin_name = name_match.group(1).replace('.py', '') if name_match else filename.replace('.py', '')
         
