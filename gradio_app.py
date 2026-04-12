@@ -654,7 +654,7 @@ def run_analysis(analyzer_name, max_rows, max_cols, progress=gr.Progress()):
             gr.update(value=selected_type),          # Update chart type dropdown
             df,                                      # For gr.State
             gr.update(choices=cols, value=cols[0]),  # X-Axis
-            gr.update(choices=cols, value=cols[1] if len(cols) > 1 else None), # Y-Axis
+            gr.update(choices=cols, value=cols[1] if len(cols) > 1 else cols[0]), # Y-Axis
             gr.update(choices=choices_with_none, value=None), # Color By
             gr.update(choices=choices_with_none, value=None)  # Facet By
         )
