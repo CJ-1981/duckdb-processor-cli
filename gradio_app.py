@@ -677,9 +677,10 @@ def execute_sql(query, max_rows, max_cols, progress=gr.Progress()):
     if "`" in query:
         query = query.replace("`", '"')
     
-    # Remove SQL comments to avoid parsing errors in generated chart queries
-    # Use a pattern that respects single quotes to avoid breaking literal strings
-    query = re.sub(r"(--.*?(?=(?:'[^']*'[^']*')*[^']*$))", "", query)
+    # Remove SQL comments to avoid parsing errors
+    # Regex explanation: Match '--' followed by any characters until the end of the line,
+    # provided that the '--' is NOT inside single quotes.
+    query = re.sub(r"(--[^\n\r]*?(?=(?:'[^']*'[^']*')*[^']*$))", "", query)
     query = re.sub(r'/\*.*?\*/', '', query, flags=re.DOTALL)
     query = query.strip()
     if query.endswith(';'):
