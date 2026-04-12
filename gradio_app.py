@@ -16,7 +16,7 @@ import traceback
 import datetime
 import atexit
 import re
-from fpdf import FPDF
+from fpdf import FPDF, XPos, YPos
 import itables
 import markdown
 
@@ -956,6 +956,128 @@ def generate_interactive_html(title, author, sections):
         logger.error(f"[HTML_GEN] Failed: {e}", exc_info=True)
         raise gr.Error(f"Failed to generate HTML report: {e}")
 
+
+class PDF(FPDF):
+    def __init__(self, font_name="helvetica", **kwargs):
+        super().__init__(**kwargs)
+        self.report_font = font_name
+
+    def header(self):
+        self.set_font(self.report_font, 'B' if self.report_font == 'helvetica' else "", 12)
+        self.cell(0, 10, 'DuckDB Analysis Report', align='C', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(5)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font(self.report_font, 'I' if self.report_font == 'helvetica' else "", 8)
+        self.cell(0, 10, f'Page {self.page_no()}', align='C', new_x=XPos.RIGHT, new_y=YPos.TOP)
+
+def generate_report_pdf(title, author, sections):
+    """Generate a PDF and return the file path."""
+    global global_processor
+
+    # Unicode support for Mac: Try to find a font that supports Korean/Special characters
+    # We do a preliminary check to initialize the PDF class with the right font for header/footer
+    unicode_font_path = "/Library/Fonts/Arial Unicode.ttf"
+    font_name = "helvetica"
+    has_unicode = False
+
+    if os.path.exists(unicode_font_path):
+        font_name = "ArialUnicode"
+        has_unicode = True
+
+    pdf = PDF(font_name=font_name)
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    if has_unicode:
+        try:
+            pdf.add_font("ArialUnicode", "", unicode_font_path)
+        except Exception as e:
+            logger.warning(f"Failed to load Unicode font: {e}. Falling back to helvetica.")
+            pdf.report_font = "helvetica"
+            has_unicode = False
+            font_name = "helvetica"
+
+    pdf.add_page()
+
+    # Title Page Info
+    pdf.set_font(font_name, 'B' if not has_unicode else "", 16)
+    pdf.cell(0, 10, title or "DuckDB Analysis Report", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
+    pdf.set_font(font_name, '', 10)
+    pdf.cell(0, 8, f"Author: {author or 'Anonymous'}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
+    pdf.cell(0, 8, f"Date: {get_report_timestamp()}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
+    pdf.ln(10)
+
+    for s in sections:
+        pdf.set_font(font_name, 'B' if not has_unicode else "", 14)
+        pdf.set_text_color(79, 70, 229) # Indigo
+        pdf.cell(0, 10, s['heading'], new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
+        pdf.set_text_color(0, 0, 0) # Black
+        pdf.ln(2)
+
+        pdf.set_font(font_name, '', 10)
+
+        if s['type'] == "Text/Note":
+            pdf.multi_cell(0, 8, s['body'])
+            pdf.ln(5)
+
+        elif s['type'] in ["Analyzer Results Table", "SQL Results Table"]:
+            df = global_processor.last_result if global_processor else None
+            if df is not None and not df.empty:
+                if global_processor is not None and global_processor.last_action:
+                    pdf.set_font(font_name, 'I' if not has_unicode else "", 8)
+                    pdf.cell(0, 6, f"Data Source: {global_processor.last_action}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+                # Expand to 12 columns for more data visibility
+                pdf_df = df.head(15).iloc[:, :12]
+
+                # Table Header
+                pdf.set_font(font_name, 'B' if not has_unicode else "", 8)
+                col_width = pdf.epw / len(pdf_df.columns)
+                for col in pdf_df.columns:
+                    pdf.cell(col_width, 7, str(col)[:12], border=1)
+                pdf.ln()
+
+                # Table Data
+                pdf.set_font(font_name, '', 7)
+                for index, row in pdf_df.iterrows():
+                    for val in row:
+                        pdf.cell(col_width, 7, str(val)[:15], border=1)
+                    pdf.ln()
+
+                if len(df) > 15:
+                    pdf.set_font(font_name, 'I' if not has_unicode else "", 7)
+                    pdf.cell(0, 5, f"(Showing first 15 rows of {len(df)})", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
+                pdf.ln(5)
+            else:
+                pdf.cell(0, 8, "No data results available to display.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.ln(5)
+
+        elif s['type'] == "Data Summary":
+             if global_processor:
+                info = global_processor.info()
+                pdf.cell(0, 8, f"- Total Rows: {info.get('rows', '?')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.cell(0, 8, f"- Total Columns: {len(info.get('columns', []))}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.cell(0, 8, f"- Source File: {os.path.basename(info.get('source', 'unknown'))}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+             else:
+                pdf.cell(0, 8, "No data summary available.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+             pdf.ln(5)
+
+        elif s['type'] == "Schema Info":
+            if global_processor:
+                schema_text = get_schema_info()
+                pdf.set_font("Courier", '', 8)
+                pdf.multi_cell(0, 6, schema_text)
+                pdf.set_font(font_name, '', 10)
+            else:
+                pdf.cell(0, 8, "No schema info available.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.ln(5)
+
+    filename = f"duck_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    path = os.path.abspath(filename)
+    pdf.output(path)
+    return path
+
 def export_report_file(fmt, title, author, sections):
     """Dispatcher for exporting the report."""
     logger.info(f"[REPORT] Export starting for format={fmt}")
@@ -976,6 +1098,11 @@ def export_report_file(fmt, title, author, sections):
             logger.info("[REPORT] Calling generate_interactive_html")
             path = generate_interactive_html(title, author, sections)
             logger.info(f"[REPORT] HTML file generated at: {path}")
+            return os.path.abspath(path)
+        elif fmt == "pdf":
+            logger.info("[REPORT] Calling generate_report_pdf")
+            path = generate_report_pdf(title, author, sections)
+            logger.info(f"[REPORT] PDF file generated at: {path}")
             return os.path.abspath(path)
     except Exception as e:
         logger.error(f"Report export error: {e}", exc_info=True)
@@ -1911,6 +2038,7 @@ def create_ui():
                         with gr.Row():
                             gen_md_btn = gr.Button("📝 Generate Markdown", variant="primary")
                             gen_html_btn = gr.Button("🌐 Generate Interactive HTML", variant="primary")
+                            gen_pdf_btn = gr.Button("📄 Generate PDF", variant="primary")
 
                             report_output_file = gr.File(
                             label="Download Generated Report",
@@ -2268,6 +2396,12 @@ def create_ui():
 
         gen_html_btn.click(
             fn=lambda t, a, s: export_report_file('html', t, a, s),
+            inputs=[report_title, report_author, report_sections_state],
+            outputs=[report_output_file]
+        ).then(lambda p: gr.update(visible=True, value=p), inputs=[report_output_file], outputs=[report_output_file])
+
+        gen_pdf_btn.click(
+            fn=lambda t, a, s: export_report_file('pdf', t, a, s),
             inputs=[report_title, report_author, report_sections_state],
             outputs=[report_output_file]
         ).then(lambda p: gr.update(visible=True, value=p), inputs=[report_output_file], outputs=[report_output_file])
