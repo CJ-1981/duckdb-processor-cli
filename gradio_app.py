@@ -287,9 +287,10 @@ def generate_auto_chart(df):
     """Attempt to generate a relevant native chart update from a dataframe."""
     hide = gr.update(visible=False, value=None)
     bar_upd, line_upd, scatter_upd = hide, hide, hide
+    selected_type = "Bar"
     
     if df is None or df.empty or len(df.columns) < 1:
-        return bar_upd, line_upd, scatter_upd
+        return bar_upd, line_upd, scatter_upd, selected_type
     
     try:
         cols = df.columns.tolist()
@@ -301,22 +302,24 @@ def generate_auto_chart(df):
             counts = df[cols[0]].value_counts().reset_index()
             counts.columns = [cols[0], "count"]
             bar_upd = gr.update(value=counts, x=cols[0], y="count", visible=True, title=f"Frequency of {cols[0]}")
-            return bar_upd, line_upd, scatter_upd
+            return bar_upd, line_upd, scatter_upd, "Bar"
 
         x_col = next((c for c in cols if c not in numeric_cols), cols[0])
         y_col = numeric_cols[0]
         
         if "date" in str(x_col).lower() or "time" in str(x_col).lower():
             line_upd = gr.update(value=df, x=x_col, y=y_col, visible=True, title=f"{y_col} over {x_col}")
+            selected_type = "Line"
         else:
             bar_upd = gr.update(value=df, x=x_col, y=y_col, visible=True, title=f"{y_col} by {x_col}")
+            selected_type = "Bar"
             
-        return bar_upd, line_upd, scatter_upd
+        return bar_upd, line_upd, scatter_upd, selected_type
         
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"Auto-chart failed: {e}")
-        return hide, hide, hide
+        return hide, hide, hide, "Bar"
 
     
     template = "plotly_dark" if is_dark else "plotly_white"
@@ -375,10 +378,27 @@ def get_chart_updates(df, chart_type, x_axis, y_axis, color_by=None, facet_by=No
     hide = gr.update(visible=False, value=None)
     bar_upd, line_upd, scatter_upd = hide, hide, hide
 
-    if df is None or df.empty or not chart_type or not x_axis:
+    if df is None or df.empty or not chart_type:
         return bar_upd, line_upd, scatter_upd
 
     try:
+        # Ensure we have an X axis
+        if not x_axis:
+            x_axis = df.columns[0]
+        
+        # Ensure we have a Y axis if needed (most plots need it)
+        if not y_axis:
+            # Try to find first numeric column
+            numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+            if numeric_cols:
+                y_axis = numeric_cols[0]
+            else:
+                # Fallback to counts if no numeric columns
+                counts = df[x_axis].value_counts().reset_index()
+                counts.columns = [x_axis, "count"]
+                df = counts
+                y_axis = "count"
+
         # Determine which plot to show and update
         if chart_type == "Bar":
             bar_upd = gr.update(
@@ -390,8 +410,15 @@ def get_chart_updates(df, chart_type, x_axis, y_axis, color_by=None, facet_by=No
                 title=f"{y_axis} by {x_axis}"
             )
         elif chart_type == "Line":
+            # For line plots, sort by X axis if possible for better visualization
+            df_plot = df
+            try:
+                df_plot = df.sort_values(by=x_axis)
+            except:
+                pass
+                
             line_upd = gr.update(
-                value=df, 
+                value=df_plot, 
                 x=x_axis, 
                 y=y_axis, 
                 color=color_by if color_by and color_by != "None" else None, 
@@ -524,16 +551,20 @@ def load_data(file_objs, header, kv, table_mapping="", progress=gr.Progress()):
             "active_table": global_processor.table
         }
 
+        # Auto-chart for initial load
+        bar_upd, line_upd, scatter_upd, selected_type = generate_auto_chart(preview_df)
+
         return (
             f"✅ Data Loaded Successfully\n\n{info_str}\n\n💡 Performance optimized for local PC.",
             preview_df,
             schema_str,
-            gr.update(value=health_df), # For gr.BarPlot
+            bar_upd,
             health_df, # For coverage table
             profile_df, # For summary table
             gr.update(value=info_str),  # progress_box
             gr.update(value=stats_text), # exec_stats
             table_dropdown_update, # active table
+            gr.update(value=selected_type), # sql_chart_type
             new_state # BrowserState
         )
     except Exception as e:
@@ -569,18 +600,18 @@ def run_analysis(analyzer_name, max_rows, max_cols, progress=gr.Progress()):
         col_width = 150 if max_cols == "All" else (1500 // int(max_cols))
         style_injection = f"<style>#analysis-results td, #analysis-results th {{ min-width: {col_width}px !important; }}</style>"
         
-        bar_upd, line_upd, scatter_upd = generate_auto_chart(df)
+        bar_upd, line_upd, scatter_upd, selected_type = generate_auto_chart(df)
         cols = df.columns.tolist()
         choices_with_none = [None] + cols
         
         progress(1.0, desc="Done!")
         return (
-            f"✅ Analyzer '{analyzer_name}' completed!", 
             gr.update(value=df, max_height=height_px), 
             style_injection, 
             bar_upd,
             line_upd,
             scatter_upd,
+            gr.update(value=selected_type),          # Update chart type dropdown
             df,                                      # For gr.State
             gr.update(choices=cols, value=cols[0]),  # X-Axis
             gr.update(choices=cols, value=cols[1] if len(cols) > 1 else None), # Y-Axis
@@ -627,7 +658,7 @@ def execute_sql(query, max_rows, max_cols, progress=gr.Progress()):
             if len(query_history) > 20: query_history.pop()
 
         progress(0.7, desc="Generating auto-chart...")
-        bar_upd, line_upd, scatter_upd = generate_auto_chart(df)
+        bar_upd, line_upd, scatter_upd, selected_type = generate_auto_chart(df)
         cols = df.columns.tolist()
         choices_with_none = [None] + cols
         stats_text = get_execution_stats()
@@ -641,6 +672,7 @@ def execute_sql(query, max_rows, max_cols, progress=gr.Progress()):
             bar_upd,
             line_upd,
             scatter_upd,
+            gr.update(value=selected_type),          # Update chart type dropdown
             df,                                      # For gr.State
             gr.update(choices=cols, value=cols[0]),  # X-Axis
             gr.update(choices=cols, value=cols[1] if len(cols) > 1 else None), # Y-Axis
@@ -1342,7 +1374,7 @@ def restore_session(state):
             table_mapping=state.get("table_mapping", "")
         )
         
-        if len(res) == 10:
+        if len(res) == 11:
             # 2. Handle active table restoration if different from default
             active_table = state.get("active_table")
             if active_table and global_processor and active_table != global_processor.table:
@@ -1384,7 +1416,7 @@ def restore_session(state):
     except Exception as e:
         logger.error(f"[RECOVERY] Restoration failed: {e}")
     
-    return [gr.update()] * 15
+    return [gr.update()] * 16
 
 
 def add_report_section(sections, stype, heading, body):
@@ -1942,11 +1974,36 @@ def create_ui():
 
         def handle_load_click(file_obj, header, kv, table_mapping_input):
             log_event("load_click", file_obj, header, kv)
+            logger.info(f"[LOAD_BTN] Loading: file={file_obj}, header={header}, kv={kv}")
+
             result = load_data(file_obj, header, kv, table_mapping=table_mapping_input)
-            if len(result) == 10:
-                # info_msg, preview_df, schema_str, health_bar, health_df, profile_df, progress_update, stats_update, table_dropdown_update, new_state
+            logger.info(f"[LOAD_BTN] Result: type={type(result)}, len={len(result) if hasattr(result, '__len__') else 'N/A'}")
+
+            # Unpack the 11-element tuple from load_data
+            if len(result) == 11:
+                info_msg, preview_df, schema_str, health_bar, health_df, profile_df, progress_update, stats_update, table_dropdown_update, chart_type_update, new_state = result
+                logger.info(f"[LOAD_BTN] Info: {info_msg[:50] if info_msg else 'None'}...")
+                return (
+                    info_msg,           # info_box
+                    preview_df,         # preview_table
+                    schema_str,         # schema_sidebar
+                    health_bar,         # profile_plot (BarPlot)
+                    health_df,          # profile_coverage_table
+                    profile_df,         # profile_summary_table
+                    progress_update,    # progress_box
+                    stats_update,       # exec_stats
+                    table_dropdown_update, # table_dropdown
+                    chart_type_update,  # sql_chart_type
+                    new_state           # app_state
+                )
+            else:
+                logger.error(f"[LOAD_BTN] Unexpected result length: {len(result)}")
+                # Add missing updates if needed
+                while isinstance(result, tuple) and len(result) < 11:
+                    result = result + (gr.update(),)
+                if not isinstance(result, tuple):
+                    result = (gr.update(),) * 11
                 return result
-            return [gr.update()] * 10
 
         def handle_table_switch(table_name, current_state):
             log_event("table_switch", table_name)
@@ -1973,16 +2030,16 @@ def create_ui():
             except Exception as e:
                 return [gr.update()] * 8
 
-        # Wire up event handlers
+        # Survival restoration on load (theme switch / refresh)
         app.load(fn=restore_session, inputs=[app_state], 
-                 outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, exec_stats, table_dropdown, app_state, file_input, header_check, kv_check, table_mapping_input, sql_input])
+                 outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, exec_stats, table_dropdown, sql_chart_type, app_state, file_input, header_check, kv_check, table_mapping_input, sql_input])
 
         file_input.upload(fn=handle_file_upload, inputs=[file_input], outputs=[file_input, info_box])
 
         load_btn.click(
             fn=handle_load_click,
             inputs=[file_input, header_check, kv_check, table_mapping_input],
-            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, exec_stats, table_dropdown, app_state],
+            outputs=[info_box, preview_table, schema_sidebar, profile_plot, profile_coverage_table, profile_summary_table, progress_box, exec_stats, table_dropdown, sql_chart_type, app_state],
             api_name="load_data"
         )
         
@@ -2008,7 +2065,7 @@ def create_ui():
                 current_state["sql_query"] = query
                 
             res = execute_sql(query, max_rows, max_cols)
-            # res is a tuple of 12 elements, we append current_state
+            # res is a tuple of 13 elements, we append current_state
             return res + (current_state,)
 
         # Format/Prettify SQL button handler
@@ -2036,6 +2093,7 @@ def create_ui():
                 sql_bar_display,      # Native Bar Plot
                 sql_line_display,     # Native Line Plot
                 sql_scatter_display,  # Native Scatter Plot
+                sql_chart_type,       # Update chart type dropdown
                 sql_state,            # Store dataframe for charting
                 sql_x_axis,           # Update chart controls
                 sql_y_axis,           # Update chart controls
@@ -2157,6 +2215,7 @@ def create_ui():
                 ana_bar_display,
                 ana_line_display,
                 ana_scatter_display,
+                sql_chart_type,
                 analysis_state,
                 sql_x_axis,
                 sql_y_axis,
