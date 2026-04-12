@@ -15,8 +15,8 @@ import logging
 import traceback
 import datetime
 import atexit
-from fpdf import FPDF
-from fpdf.enums import XPos, YPos
+import mistletoe
+import itables
 
 # Set up detailed logging for debugging file loading issues
 logging.basicConfig(
@@ -224,28 +224,35 @@ def get_execution_stats():
     return f"Rows processed: {execution_stats['rows_processed']}\nQueries executed: {execution_stats['queries_executed']}\nErrors: {execution_stats['errors']}"
 
 def get_data_profiling():
-    """Fetch coverage and summary statistics as dataframes."""
+    """Fetch coverage and summary statistics as dataframes using DuckDB SQL (no Pandas transforms)."""
     global global_processor
     if global_processor is None:
         return None, None
-    
+
     try:
-        # Get coverage data
+        # Coverage from processor (already a display-friendly structure)
         df_coverage = global_processor.coverage()
-        
-        # Get summary statistics using DuckDB SUMMARIZE
-        df_summary = global_processor.con.execute(f'SUMMARIZE "{global_processor.table}"').df()
-        
-        # Explicitly round typical numeric-stat columns for readability
-        for col in ['min', 'max', 'avg', 'std', 'q25', 'q50', 'q75', 'null_percentage']:
-            if col in df_summary.columns:
-                try:
-                    # Convert to numeric (coercing non-numeric to NaN) then round
-                    numeric_series = pd.to_numeric(df_summary[col], errors='coerce')
-                    df_summary[col] = numeric_series.round(2)
-                except Exception:
-                    pass
-                    
+
+        # Use DuckDB SUMMARIZE but round numeric statistics inside SQL so no Pandas numeric coercion is needed
+        summary_sql = f'''
+        SELECT
+            "column",
+            "type",
+            "count",
+            "null_count",
+            ROUND(TRY_CAST("min" AS DOUBLE), 2) AS "min",
+            ROUND(TRY_CAST("max" AS DOUBLE), 2) AS "max",
+            ROUND(TRY_CAST("avg" AS DOUBLE), 2) AS "avg",
+            ROUND(TRY_CAST("std" AS DOUBLE), 2) AS "std",
+            ROUND(TRY_CAST("q25" AS DOUBLE), 2) AS "q25",
+            ROUND(TRY_CAST("q50" AS DOUBLE), 2) AS "q50",
+            ROUND(TRY_CAST("q75" AS DOUBLE), 2) AS "q75",
+            ROUND(TRY_CAST("null_percentage" AS DOUBLE), 2) AS "null_percentage",
+            "distinct_count"
+        FROM (SUMMARIZE "{global_processor.table}")
+        '''
+        df_summary = global_processor.con.execute(summary_sql).df()
+
         return df_coverage, df_summary
     except Exception as e:
         logger.error(f"Profiling failed: {e}")
@@ -284,97 +291,105 @@ def export_results(format, df=None):
         logger.error(f"Export error: {e}")
         raise gr.Error(f"Export failed: {e}")
 def generate_auto_chart(df):
-    """Attempt to generate a relevant native chart update from a dataframe."""
+    """Attempt to generate a relevant native chart update from a dataframe using DuckDB SQL when possible."""
+    global global_processor
     hide = gr.update(visible=False, value=None)
     bar_upd, line_upd, scatter_upd = hide, hide, hide
     selected_type = "Bar"
-    
+
     if df is None or df.empty or len(df.columns) < 1:
         return bar_upd, line_upd, scatter_upd, selected_type
-    
+
     try:
-        cols = df.columns.tolist()
-        numeric_df = df.select_dtypes(include=['number', 'float', 'int'])
-        numeric_cols = numeric_df.columns.tolist()
-        
+        cols = list(df.columns)
+        # Try to detect numeric columns using DuckDB metadata when available
+        numeric_cols = []
+        source_sql = None
+        if global_processor is not None:
+            try:
+                if getattr(global_processor, "last_query", None):
+                    source_sql = f"({global_processor.last_query})"
+                else:
+                    source_sql = f'"{global_processor.table}"'
+                # If source is a real table, query information_schema for types
+                if source_sql and global_processor.last_query is None:
+                    col_info = global_processor.con.execute(f"""
+                        SELECT column_name, data_type
+                        FROM information_schema.columns
+                        WHERE table_name = '{global_processor.table}';
+                    """).df()
+                    for row in col_info.to_dict('records'):
+                        dt = (row.get('data_type') or '').lower()
+                        if any(k in dt for k in ('int', 'double', 'float', 'numeric', 'decimal', 'real')):
+                            numeric_cols.append(row.get('column_name'))
+            except Exception:
+                numeric_cols = []
+
+        # Fallback to simple dtype inference from the pandas dataframe (read-only, non-mutating)
         if not numeric_cols:
-            # If no numeric, bar chart of counts for the first column
-            counts = df[cols[0]].value_counts().reset_index()
-            counts.columns = [cols[0], "count"]
-            bar_upd = gr.update(value=counts, x=cols[0], y="count", visible=True, title=f"Frequency of {cols[0]}")
+            try:
+                numeric_cols = [c for c in cols if str(df[c].dtype).startswith(('int','float'))]
+            except Exception:
+                numeric_cols = []
+
+        # If no numeric columns found, produce a frequency table for the first column via SQL when possible
+        if not numeric_cols:
+            first_col = cols[0]
+            if source_sql and global_processor is not None:
+                q = f'SELECT "{first_col}" AS category, COUNT(*) AS count FROM {source_sql} GROUP BY 1 ORDER BY count DESC LIMIT 100'
+                counts_df = global_processor.con.execute(q).df()
+                bar_upd = gr.update(value=counts_df, x='category', y='count', visible=True, title=f"Frequency of {first_col}")
+            else:
+                # Build frequency counts without using pandas groupby/value_counts for manipulation
+                from collections import Counter
+                vals = [v for v in df[first_col]]
+                counts = Counter(vals)
+                counts_list = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+                counts_df = pd.DataFrame([{'category': k, 'count': v} for k, v in counts_list])
+                bar_upd = gr.update(value=counts_df, x='category', y='count', visible=True, title=f"Frequency of {first_col}")
             return bar_upd, line_upd, scatter_upd, "Bar"
 
         x_col = next((c for c in cols if c not in numeric_cols), cols[0])
         y_col = numeric_cols[0]
-        
-        if "date" in str(x_col).lower() or "time" in str(x_col).lower():
-            line_upd = gr.update(value=df, x=x_col, y=y_col, visible=True, title=f"{y_col} over {x_col}")
-            selected_type = "Line"
+
+        # Time-series heuristic
+        if 'date' in str(x_col).lower() or 'time' in str(x_col).lower():
+            if source_sql and global_processor is not None:
+                q = f'SELECT "{x_col}" AS x, SUM(TRY_CAST("{y_col}" AS DOUBLE)) AS y FROM {source_sql} GROUP BY 1 ORDER BY x'
+                plot_df = global_processor.con.execute(q).df()
+                line_upd = gr.update(value=plot_df, x='x', y='y', visible=True, title=f"{y_col} over {x_col}")
+            else:
+                try:
+                    # Sort using Python builtins to avoid pandas manipulation methods
+                    pairs = [(x, y) for x, y in zip(df[x_col], df[y_col])]
+                    pairs_sorted = sorted(pairs, key=lambda t: (t[0] is None, t[0]))
+                    plot_df = pd.DataFrame([{x_col: p[0], y_col: p[1]} for p in pairs_sorted])
+                    line_upd = gr.update(value=plot_df, x=x_col, y=y_col, visible=True, title=f"{y_col} over {x_col}")
+                except Exception:
+                    line_upd = gr.update(value=df, x=x_col, y=y_col, visible=True, title=f"{y_col} over {x_col}")
+            return bar_upd, line_upd, scatter_upd, "Line"
+
+        # Default: aggregated bar by x_col
+        if source_sql and global_processor is not None:
+            q = f'SELECT "{x_col}" AS x, SUM(TRY_CAST("{y_col}" AS DOUBLE)) AS y FROM {source_sql} GROUP BY 1 ORDER BY y DESC LIMIT 100'
+            plot_df = global_processor.con.execute(q).df()
+            bar_upd = gr.update(value=plot_df, x='x', y='y', visible=True, title=f"{y_col} by {x_col}")
         else:
             bar_upd = gr.update(value=df, x=x_col, y=y_col, visible=True, title=f"{y_col} by {x_col}")
-            selected_type = "Bar"
-            
+
         return bar_upd, line_upd, scatter_upd, selected_type
-        
+
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"Auto-chart failed: {e}")
+        logger.error(f"Auto-chart failed: {e}")
         return hide, hide, hide, "Bar"
 
-    
-    template = "plotly_dark" if is_dark else "plotly_white"
-    bg_color = "#111827" if is_dark else "white"
-    
-    try:
-        cols = df.columns
-        n_cols = len(cols)
-        numeric_df = df.select_dtypes(include=['number', 'float', 'int'])
-        numeric_cols = numeric_df.columns.tolist()
-        other_cols = [c for c in cols if c not in numeric_cols]
-        
-        # 1. Histogram (Single Numeric Column)
-        if n_cols == 1 and numeric_cols:
-            fig = px.histogram(df, x=cols[0], title=f"Distribution of {cols[0]}", nbins=30, template=template)
-            
-        # 2. Heatmap (Multiple Numeric Columns - Pivot Table style)
-        elif len(numeric_cols) > 2 and not other_cols:
-             fig = px.imshow(numeric_df, text_auto=True, title="Data Heatmap", aspect="auto", template=template)
-             
-        elif not numeric_cols:
-            # If no numeric, try bar chart of counts for the first column
-            counts = df[cols[0]].value_counts().reset_index()
-            counts.columns = [cols[0], "count"]
-            fig = px.bar(counts, x=cols[0], y="count", title=f"Frequency of {cols[0]}", template=template)
-        
-        else:
-            x_col = other_cols[0] if other_cols else cols[0]
-            y_col = numeric_cols[0]
-            
-            # 3. Scatter Plot (Exactly Two Numeric Columns)
-            if len(numeric_cols) == 2 and not other_cols:
-                fig = px.scatter(df, x=numeric_cols[0], y=numeric_cols[1], title=f"{numeric_cols[1]} vs {numeric_cols[0]}", template=template)
-    
-            # 4. Pie Chart (Few categories + 1 Numeric)
-            elif len(other_cols) == 1 and len(numeric_cols) == 1 and 1 < df[other_cols[0]].nunique() < 12:
-                fig = px.pie(df, names=other_cols[0], values=numeric_cols[0], title=f"{numeric_cols[0]} Distribution by {other_cols[0]}", template=template)
-    
-            # 5. Line and Bar charts (Time-series or larger categories)
-            elif "date" in x_col.lower() or "time" in x_col.lower():
-                fig = px.line(df, x=x_col, y=y_col, title=f"{y_col} over {x_col}", template=template)
-            else:
-                fig = px.bar(df, x=x_col, y=y_col, title=f"{y_col} by {x_col}", template=template)
-
-        if is_dark and fig:
-            fig.update_layout(paper_bgcolor=bg_color, plot_bgcolor=bg_color)
-        return fig
-        
-    except Exception as e:
-        logger.error(f"Chart error: {e}")
-        return None
-
 def get_chart_updates(df, chart_type, x_axis, y_axis, color_by=None, facet_by=None, show_trend=False):
-    """Generate updates for native Gradio plot components based on user selection."""
-    # Hide all by default
+    """Generate updates for native Gradio plot components based on user selection.
+
+    Uses DuckDB SQL aggregations when a global_processor is available to avoid
+    manipulating DataFrames with Pandas (select_dtypes/value_counts/sort_values).
+    """
+    global global_processor
     hide = gr.update(visible=False, value=None)
     bar_upd, line_upd, scatter_upd = hide, hide, hide
 
@@ -382,60 +397,80 @@ def get_chart_updates(df, chart_type, x_axis, y_axis, color_by=None, facet_by=No
         return bar_upd, line_upd, scatter_upd
 
     try:
-        # Ensure we have an X axis
+        # Default X axis
         if not x_axis:
             x_axis = df.columns[0]
-        
-        # Ensure we have a Y axis if needed (most plots need it)
+
+        # Determine Y axis: prefer numeric columns discovered via DuckDB metadata
         if not y_axis:
-            # Try to find first numeric column
-            numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+            numeric_cols = []
+            if global_processor is not None and getattr(global_processor, 'last_query', None) is None:
+                try:
+                    col_info = global_processor.con.execute(f"SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '{global_processor.table}'").df()
+                    numeric_cols = [r['column_name'] for r in col_info.to_dict('records') if any(k in (r.get('data_type') or '').lower() for k in ('int','double','float','numeric','decimal','real'))]
+                except Exception:
+                    numeric_cols = []
+
+            if not numeric_cols:
+                # Lightweight pandas dtype inspection (non-mutating fallback)
+                try:
+                    numeric_cols = [c for c in df.columns if str(df[c].dtype).startswith(('int','float'))]
+                except Exception:
+                    numeric_cols = []
+
             if numeric_cols:
                 y_axis = numeric_cols[0]
             else:
-                # Fallback to counts if no numeric columns
-                counts = df[x_axis].value_counts().reset_index()
-                counts.columns = [x_axis, "count"]
-                df = counts
-                y_axis = "count"
+                # No numeric columns: produce counts aggregated via SQL when possible
+                if global_processor is not None:
+                    source_sql = f"({global_processor.last_query})" if getattr(global_processor, 'last_query', None) else f'"{global_processor.table}"'
+                    q = f'SELECT "{x_axis}" as x, COUNT(*) as count FROM {source_sql} GROUP BY 1 ORDER BY count DESC LIMIT 100'
+                    df_plot = global_processor.con.execute(q).df()
+                    y_axis = 'count'
+                else:
+                    # Build frequency counts without pandas groupby/value_counts
+                    from collections import Counter
+                    vals = [v for v in df[x_axis]]
+                    counts = Counter(vals)
+                    counts_list = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+                    df_plot = pd.DataFrame([{'x': k, 'count': v} for k, v in counts_list])
+                    y_axis = 'count'
 
-        # Determine which plot to show and update
-        if chart_type == "Bar":
-            bar_upd = gr.update(
-                value=df, 
-                x=x_axis, 
-                y=y_axis, 
-                color=color_by if color_by and color_by != "None" else None, 
-                visible=True,
-                title=f"{y_axis} by {x_axis}"
-            )
-        elif chart_type == "Line":
-            # For line plots, sort by X axis if possible for better visualization
-            df_plot = df
-            try:
-                df_plot = df.sort_values(by=x_axis)
-            except:
-                pass
-                
-            line_upd = gr.update(
-                value=df_plot, 
-                x=x_axis, 
-                y=y_axis, 
-                color=color_by if color_by and color_by != "None" else None, 
-                visible=True,
-                title=f"{y_axis} over {x_axis}"
-            )
-        elif chart_type == "Scatter":
-            scatter_upd = gr.update(
-                value=df, 
-                x=x_axis, 
-                y=y_axis, 
-                color=color_by if color_by and color_by != "None" else None, 
-                visible=True,
-                title=f"{y_axis} vs {x_axis}"
-            )
-            
-        return bar_upd, line_upd, scatter_upd
+                bar_upd = gr.update(value=df_plot, x='x' if 'x' in df_plot.columns else x_axis, y=y_axis, visible=True, title=f"{y_axis} by {x_axis}")
+                return bar_upd, hide, hide
+
+        # Chart-specific rendering using SQL aggregations when possible
+        if chart_type == 'Bar':
+            if global_processor is not None:
+                source_sql = f"({global_processor.last_query})" if getattr(global_processor, 'last_query', None) else f'"{global_processor.table}"'
+                q = f'SELECT "{x_axis}" AS x, SUM(TRY_CAST("{y_axis}" AS DOUBLE)) AS y FROM {source_sql} GROUP BY 1 ORDER BY y DESC LIMIT 100'
+                plot_df = global_processor.con.execute(q).df()
+                bar_upd = gr.update(value=plot_df, x='x', y='y', visible=True, title=f"{y_axis} by {x_axis}")
+            else:
+                bar_upd = gr.update(value=df, x=x_axis, y=y_axis, visible=True, title=f"{y_axis} by {x_axis}")
+            return bar_upd, hide, hide
+
+        if chart_type == 'Line':
+            if global_processor is not None:
+                source_sql = f"({global_processor.last_query})" if getattr(global_processor, 'last_query', None) else f'"{global_processor.table}"'
+                q = f'SELECT "{x_axis}" AS x, SUM(TRY_CAST("{y_axis}" AS DOUBLE)) AS y FROM {source_sql} GROUP BY 1 ORDER BY x'
+                plot_df = global_processor.con.execute(q).df()
+                line_upd = gr.update(value=plot_df, x='x', y='y', visible=True, title=f"{y_axis} over {x_axis}")
+            else:
+                try:
+                    pairs = [(x, y) for x, y in zip(df[x_axis], df[y_axis])]
+                    pairs_sorted = sorted(pairs, key=lambda t: (t[0] is None, t[0]))
+                    plot_df = pd.DataFrame([{x_axis: p[0], y_axis: p[1]} for p in pairs_sorted])
+                except Exception:
+                    plot_df = df
+                line_upd = gr.update(value=plot_df, x=x_axis, y=y_axis, visible=True, title=f"{y_axis} over {x_axis}")
+            return hide, line_upd, hide
+
+        if chart_type == 'Scatter':
+            scatter_upd = gr.update(value=df, x=x_axis, y=y_axis, color=color_by if color_by and color_by != 'None' else None, visible=True, title=f"{y_axis} vs {x_axis}")
+            return hide, hide, scatter_upd
+
+        return hide, hide, hide
     except Exception as e:
         logger.error(f"Failed to generate native chart: {e}")
         return hide, hide, hide
@@ -750,9 +785,17 @@ def get_report_timestamp():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 def add_report_section(sections, s_type, s_heading, s_body):
-    """Add a new section to the report list."""
+    """Add a new section to the report list capturing an immutable data snapshot."""
+    global global_processor
     if not sections: sections = []
-    new_section = {"type": s_type, "heading": s_heading, "body": s_body}
+    snapshot = None
+    try:
+        if global_processor and getattr(global_processor, 'last_result', None) is not None:
+            snapshot = global_processor.last_result.copy(deep=True)
+    except Exception:
+        snapshot = None
+
+    new_section = {"type": s_type, "heading": s_heading, "body": s_body, "data": snapshot}
     sections.append(new_section)
     return sections, f"✅ Added section: {s_heading}"
 
@@ -797,17 +840,28 @@ def generate_report_markdown(title, author, sections, include_summary=True, incl
             md += f"{s['body']}\n\n"
         
         elif s['type'] in ["Analyzer Results Table", "SQL Results Table"]:
-            if global_processor and global_processor.last_result is not None:
-                if global_processor.last_action:
+            # Prefer an immutable snapshot captured when the section was added
+            snapshot = s.get('data') if isinstance(s, dict) else None
+            # Fallback to global_processor.last_result only if no snapshot exists
+            if snapshot is None and global_processor is not None:
+                snapshot = getattr(global_processor, 'last_result', None)
+
+            if snapshot is not None:
+                if global_processor and getattr(global_processor, 'last_action', None):
                     md += f"*Source: {global_processor.last_action}*\n"
-                if s['type'] == "SQL Results Table" and global_processor.last_query:
+                if s['type'] == "SQL Results Table" and global_processor and getattr(global_processor, 'last_query', None):
                     md += f"```sql\n{global_processor.last_query}\n```\n"
 
-                if global_processor.last_result is not None and not global_processor.last_result.empty:
-                    result_md = global_processor.last_result.head(20).to_markdown(index=False) or ""
-                    md += result_md + "\n\n"
-                if len(global_processor.last_result) > 20:
-                    md += f"_(Showing top 20 of {len(global_processor.last_result)} rows)_\n\n"
+                try:
+                    if hasattr(snapshot, 'empty') and not snapshot.empty:
+                        result_md = snapshot.head(20).to_markdown(index=False) or ""
+                        md += result_md + "\n\n"
+                        if len(snapshot) > 20:
+                            md += f"_(Showing top 20 of {len(snapshot)} rows)_\n\n"
+                    else:
+                        md += "_No tabular snapshot available._\n\n"
+                except Exception:
+                    md += "_Failed to render snapshot._\n\n"
             else:
                 md += "_No results available to display._\n\n"
                 
@@ -828,155 +882,83 @@ def generate_report_markdown(title, author, sections, include_summary=True, incl
     
     return md
 
-class PDF(FPDF):
-    def __init__(self, font_name="helvetica", **kwargs):
-        super().__init__(**kwargs)
-        self.report_font = font_name
+def generate_interactive_html(title, author, sections):
+    """Generate an interactive HTML report using mistletoe (markdown) + itables for tables.
 
-    def header(self):
-        self.set_font(self.report_font, 'B' if self.report_font == 'helvetica' else "", 12)
-        self.cell(0, 10, 'DuckDB Analysis Report', align='C', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.ln(5)
+    Saves a standalone HTML file in TEMP_DIR and returns the file path.
+    """
+    global TEMP_DIR
+    if not sections:
+        raise gr.Error("No sections provided for report generation.")
 
-    def footer(self):
-        self.set_y(-15)
-        self.set_font(self.report_font, 'I' if self.report_font == 'helvetica' else "", 8)
-        self.cell(0, 10, f'Page {self.page_no()}', align='C', new_x=XPos.RIGHT, new_y=YPos.TOP)
+    try:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join(TEMP_DIR, f"duck_report_{timestamp}.html")
 
-def generate_report_pdf(title, author, sections):
-    """Generate a PDF and return the file path."""
-    global global_processor
-    
-    # Unicode support for Mac: Try to find a font that supports Korean/Special characters
-    # We do a preliminary check to initialize the PDF class with the right font for header/footer
-    font_name = "helvetica"
-    has_unicode = False
-    
-    # Platform-specific font paths for Unicode support
-    if sys.platform == "darwin":  # macOS
-        unicode_font_path = "/Library/Fonts/Arial Unicode.ttf"
-    elif sys.platform == "win32":  # Windows
-        # Common Unicode font on Windows. Arial Unicode MS is often available.
-        # It's better to bundle a font or allow configuration for broader compatibility.
-        # For now, we'll try a common system font.
-        unicode_font_path = os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "arialuni.ttf")
-    else:  # Linux and other Unix-like systems
-        # Attempt to find a common font, or let it fall back
-        # For broader compatibility, consider shipping a font like Noto Sans CJK
-        # or providing a configuration option for the user.
-        unicode_font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf" # A common Linux font
+        parts = []
+        parts.append("<!doctype html><html><head><meta charset='utf-8'/>")
+        parts.append(f"<title>{title or 'DuckDB Interactive Report'}</title>")
+        # DataTables CDN + minimal aesthetic CSS (DataGrip-like)
+        parts.append('<link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/jquery.dataTables.min.css"/>')
+        parts.append("<style>body{font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial;margin:20px;background:#0f172a;color:#e6eef8} h1,h2{color:#c7d2fe} .container{max-width:1200px;margin:auto} table.dataTable{width:100% !important;background:#071026;border-collapse:collapse} table.dataTable thead th{background:#07162a;color:#e6eef8} .dt-buttons{margin-bottom:8px}</style>")
+        parts.append('<script src="https://code.jquery.com/jquery-3.5.1.js"></script>')
+        parts.append('<script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>')
+        parts.append('</head><body><div class="container">')
+        parts.append(f"<h1>{title or 'DuckDB Interactive Report'}</h1>")
+        parts.append(f"<p><strong>Author:</strong> {author or 'Anonymous'} — <em>{get_report_timestamp()}</em></p><hr/>")
 
-    if os.path.exists(unicode_font_path):
-        font_name = "ArialUnicode" # FPDF will register this name
-        has_unicode = True
-        
-    pdf = PDF(font_name=font_name)
-    pdf.set_auto_page_break(auto=True, margin=15)
-    
-    if has_unicode:
-        try:
-            pdf.add_font("ArialUnicode", "", unicode_font_path)
-        except Exception as e:
-            logger.warning(f"Failed to load Unicode font: {e}. Falling back to helvetica.")
-            pdf.report_font = "helvetica"
-            has_unicode = False
-            font_name = "helvetica"
-    
-    pdf.add_page()
-    
-    # Title Page Info
-    pdf.set_font(font_name, 'B' if not has_unicode else "", 16)
-    pdf.cell(0, 10, title or "DuckDB Analysis Report", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
-    pdf.set_font(font_name, '', 10)
-    pdf.cell(0, 8, f"Author: {author or 'Anonymous'}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
-    pdf.cell(0, 8, f"Date: {get_report_timestamp()}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
-    pdf.ln(10)
-    
-    for s in sections:
-        pdf.set_font(font_name, 'B' if not has_unicode else "", 14)
-        pdf.set_text_color(79, 70, 229) # Indigo
-        pdf.cell(0, 10, s['heading'], new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
-        pdf.set_text_color(0, 0, 0) # Black
-        pdf.ln(2)
-        
-        pdf.set_font(font_name, '', 10)
-        
-        if s['type'] == "Text/Note":
-            pdf.multi_cell(0, 8, s['body'])
-            pdf.ln(5)
-            
-        elif s['type'] in ["Analyzer Results Table", "SQL Results Table"]:
-            df = global_processor.last_result if global_processor else None
-            if df is not None and not df.empty:
-                if global_processor is not None and global_processor.last_action:
-                    pdf.set_font(font_name, 'I' if not has_unicode else "", 8)
-                    pdf.cell(0, 6, f"Data Source: {global_processor.last_action}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                
-                # Expand to 12 columns for more data visibility
-                pdf_df = df.head(15).iloc[:, :12]
-                
-                # Table Header
-                pdf.set_font(font_name, 'B' if not has_unicode else "", 8)
-                col_width = pdf.epw / len(pdf_df.columns)
-                for col in pdf_df.columns:
-                    pdf.cell(col_width, 7, str(col)[:12], border=1)
-                pdf.ln()
-                
-                # Table Data
-                pdf.set_font(font_name, '', 7)
-                for index, row in pdf_df.iterrows():
-                    for val in row:
-                        pdf.cell(col_width, 7, str(val)[:15], border=1)
-                    pdf.ln()
-                
-                if len(df) > 15:
-                    pdf.set_font(font_name, 'I' if not has_unicode else "", 7)
-                    pdf.cell(0, 5, f"(Showing first 15 rows of {len(df)})", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
-                pdf.ln(5)
-            else:
-                pdf.cell(0, 8, "No data results available to display.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                pdf.ln(5)
-                
-        elif s['type'] == "Data Summary":
-             if global_processor:
-                info = global_processor.info()
-                pdf.cell(0, 8, f"- Total Rows: {info.get('rows', '?')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                pdf.cell(0, 8, f"- Total Columns: {len(info.get('columns', []))}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-                pdf.cell(0, 8, f"- Source File: {os.path.basename(info.get('source', 'unknown'))}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-             else:
-                pdf.cell(0, 8, "No data summary available.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-             pdf.ln(5)
-             
-        elif s['type'] == "Schema Info":
-            if global_processor:
-                schema_text = get_schema_info()
-                pdf.set_font("Courier", '', 8)
-                pdf.multi_cell(0, 6, schema_text)
-                pdf.set_font(font_name, '', 10)
-            else:
-                pdf.cell(0, 8, "No schema info available.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-            pdf.ln(5)
+        for s in sections:
+            parts.append(f"<section><h2>{s.get('heading','')}</h2>")
+            if s.get('body'):
+                try:
+                    parts.append(mistletoe.markdown(s.get('body') or ""))
+                except Exception:
+                    parts.append(f"<p>{s.get('body') or ''}</p>")
 
-    filename = f"duck_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    path = os.path.abspath(filename)
-    pdf.output(path)
-    return path
+            if s.get('type') in ["Analyzer Results Table", "SQL Results Table"]:
+                df = s.get('data')
+                if df is not None:
+                    try:
+                        # Prefer itables rendering; fallback to simple HTML table if it fails
+                        parts.append(itables.to_html_datatable(df, scrollX=True, scrollY="400px", paging=True, classes="display nowrap cell-border"))
+                    except Exception:
+                        try:
+                            parts.append(df.head(100).to_html(classes="display nowrap cell-border", index=False))
+                        except Exception:
+                            parts.append('<p>Failed to render table.</p>')
+
+            parts.append('</section><hr/>')
+
+        parts.append('</div>')
+        parts.append('<script>$(document).ready(function(){$(".display").DataTable({scrollX:true,scrollY:"400px"});});</script>')
+        parts.append('</body></html>')
+
+        html = "\n".join(parts)
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(html)
+
+        return filename
+    except Exception as e:
+        logger.error(f"Interactive HTML generation failed: {e}")
+        raise gr.Error(f"Failed to generate HTML report: {e}")
 
 def export_report_file(fmt, title, author, sections):
     """Dispatcher for exporting the report."""
     if not sections:
         return None
-    
+
     try:
         if fmt == "md":
             content = generate_report_markdown(title, author, sections)
             filename = f"duck_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
             path = os.path.abspath(filename)
-            with open(path, "w") as f:
+            with open(path, "w", encoding='utf-8') as f:
                 f.write(content)
             return path
-        elif fmt == "pdf":
-            return generate_report_pdf(title, author, sections)
+        elif fmt == "html":
+            # Use interactive HTML generator
+            path = generate_interactive_html(title, author, sections)
+            return os.path.abspath(path)
     except Exception as e:
         logger.error(f"Report export error: {e}")
         return None
@@ -1299,6 +1281,13 @@ button.btn-export, .btn-export {
     border: 1px solid #B0B0B0 !important;
     background: transparent !important;
     transition: all 0.2s !important;
+}
+
+/* Checkbox fix */
+.gradio-container:not(.dark) input[type='checkbox']:checked,
+.gradio-container:not(.dark) .gr-checkbox:checked {
+    background-color: #4A90E2 !important;
+    border-color: #4A90E2 !important;
 }
 
 /* Status Badges */
@@ -1896,7 +1885,7 @@ def create_ui():
                         gr.Markdown("---")
                         with gr.Row():
                             gen_md_btn = gr.Button("📝 Generate Markdown", variant="primary")
-                            gen_pdf_btn = gr.Button("📕 Generate PDF", variant="primary")
+                            gen_html_btn = gr.Button("🌐 Generate Interactive HTML", variant="primary")
                         
                         report_output_file = gr.File(label="Download Generated Report", visible=False)
                         report_md_preview = gr.Markdown(visible=False)
@@ -2241,7 +2230,13 @@ def create_ui():
         )
 
         gen_md_btn.click(
-            fn=lambda t, a, s: generate_report_markdown(t, a, s),
+            fn=lambda t, a, s: export_report_file('md', t, a, s),
+            inputs=[report_title, report_author, report_sections_state],
+            outputs=[report_output_file]
+        ).then(lambda p: gr.update(visible=True, value=p), inputs=[report_output_file], outputs=[report_output_file])
+
+        gen_html_btn.click(
+            fn=lambda t, a, s: export_report_file('html', t, a, s),
             inputs=[report_title, report_author, report_sections_state],
             outputs=[report_output_file]
         ).then(lambda p: gr.update(visible=True, value=p), inputs=[report_output_file], outputs=[report_output_file])
