@@ -58,7 +58,7 @@ REM ========================================================
 echo [STEP 3/3] Installing dependencies...
 "%PYTHON_EXE%" -m pip install --quiet --upgrade pip setuptools wheel
 "%PYTHON_EXE%" -m pip install --quiet -e ".[ui,export,dev]"
-"%PYTHON_EXE%" -m pip install --quiet mistletoe itables
+"%PYTHON_EXE%" -m pip install --quiet mistletoe itables markdown
 
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Failed to install dependencies
