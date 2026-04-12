@@ -839,7 +839,7 @@ def render_sections_view(sections):
             md += f"   > {s['body'][:50]}...\n" if len(s['body']) > 50 else f"   > {s['body']}\n"
     return md
 
-def generate_report_markdown(title, author, sections, include_summary=True, include_schema=True):
+def _OBSOLETE_generate_report_markdown(title, author, sections, include_summary=True, include_schema=True):
     """Generate a Markdown string from the report configuration."""
     global global_processor
     
