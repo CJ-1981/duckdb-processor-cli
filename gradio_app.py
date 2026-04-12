@@ -442,29 +442,33 @@ def get_chart_updates(df, chart_type, x_axis, y_axis, color_by=None, facet_by=No
 
         # Chart-specific rendering using SQL aggregations when possible
         if chart_type == 'Bar':
-            if global_processor is not None:
-                source_sql = f"({global_processor.last_query})" if getattr(global_processor, 'last_query', None) else f'"{global_processor.table}"'
-                q = f'SELECT "{x_axis}" AS x, SUM(TRY_CAST("{y_axis}" AS DOUBLE)) AS y FROM {source_sql} GROUP BY 1 ORDER BY y DESC LIMIT 100'
-                plot_df = global_processor.con.execute(q).df()
-                bar_upd = gr.update(value=plot_df, x='x', y='y', visible=True, title=f"{y_axis} by {x_axis}")
+            if global_processor is not None and getattr(global_processor, 'last_query', None) is not None:
+                # Sanitize last_query (remove comments)
+                base_query = global_processor.last_query
+                base_query = re.sub(r"(--.*?(?=(?:'[^']*'[^']*')*[^']*$))", "", base_query)
+                base_query = re.sub(r'/\*.*?\*/', '', base_query, flags=re.DOTALL)
+                source_sql = f"({base_query})"
             else:
-                bar_upd = gr.update(value=df, x=x_axis, y=y_axis, visible=True, title=f"{y_axis} by {x_axis}")
+                source_sql = f'"{global_processor.table}"'
+                
+            q = f'SELECT "{x_axis}" AS x, SUM(TRY_CAST("{y_axis}" AS DOUBLE)) AS y FROM {source_sql} GROUP BY 1 ORDER BY y DESC LIMIT 100'
+            plot_df = global_processor.con.execute(q).df()
+            bar_upd = gr.update(value=plot_df, x='x', y='y', visible=True, title=f"{y_axis} by {x_axis}")
             return bar_upd, hide, hide
 
         if chart_type == 'Line':
-            if global_processor is not None:
-                source_sql = f"({global_processor.last_query})" if getattr(global_processor, 'last_query', None) else f'"{global_processor.table}"'
-                q = f'SELECT "{x_axis}" AS x, SUM(TRY_CAST("{y_axis}" AS DOUBLE)) AS y FROM {source_sql} GROUP BY 1 ORDER BY x'
-                plot_df = global_processor.con.execute(q).df()
-                line_upd = gr.update(value=plot_df, x='x', y='y', visible=True, title=f"{y_axis} over {x_axis}")
+            if global_processor is not None and getattr(global_processor, 'last_query', None) is not None:
+                # Sanitize last_query (remove comments)
+                base_query = global_processor.last_query
+                base_query = re.sub(r"(--.*?(?=(?:'[^']*'[^']*')*[^']*$))", "", base_query)
+                base_query = re.sub(r'/\*.*?\*/', '', base_query, flags=re.DOTALL)
+                source_sql = f"({base_query})"
             else:
-                try:
-                    pairs = [(x, y) for x, y in zip(df[x_axis], df[y_axis])]
-                    pairs_sorted = sorted(pairs, key=lambda t: (t[0] is None, t[0]))
-                    plot_df = pd.DataFrame([{x_axis: p[0], y_axis: p[1]} for p in pairs_sorted])
-                except Exception:
-                    plot_df = df
-                line_upd = gr.update(value=plot_df, x=x_axis, y=y_axis, visible=True, title=f"{y_axis} over {x_axis}")
+                source_sql = f'"{global_processor.table}"'
+
+            q = f'SELECT "{x_axis}" AS x, SUM(TRY_CAST("{y_axis}" AS DOUBLE)) AS y FROM {source_sql} GROUP BY 1 ORDER BY x'
+            plot_df = global_processor.con.execute(q).df()
+            line_upd = gr.update(value=plot_df, x='x', y='y', visible=True, title=f"{y_axis} over {x_axis}")
             return hide, line_upd, hide
 
         if chart_type == 'Scatter':
