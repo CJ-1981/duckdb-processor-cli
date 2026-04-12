@@ -1680,7 +1680,7 @@ def create_ui():
 
     with gr.Blocks(title="DuckDB Processor UI") as app:
         # Survival across theme switches / refreshes
-        app_state = gr.BrowserState(storage_key="duckdb_processor_state_v1")
+        app_state = gr.BrowserState(storage_key="duckdb_processor_state_v2")
 
         # States to persistent data for manual charting
         analysis_state = gr.State(None)
