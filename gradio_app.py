@@ -2308,7 +2308,8 @@ def create_ui():
             new_files = current_files if isinstance(current_files, list) else ([current_files] if current_files else [])
             new_files.append(path)
             
-            return gr.update(visible=True, value=new_files)
+            # Returning an explicit gr.update is safer for component state synchronization
+            return gr.update(visible=True, value=new_files, show_progress="hidden")
 
         gen_md_btn.click(
             fn=handle_export,
