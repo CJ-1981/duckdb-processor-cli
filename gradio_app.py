@@ -1005,15 +1005,12 @@ def export_report_file(fmt, title, author, sections):
             with open(path, "w", encoding='utf-8') as f:
                 f.write(content)
             logger.info(f"[REPORT] Markdown file saved to: {path}")
+            return path
         elif fmt == "html":
             logger.info("[REPORT] Calling generate_interactive_html")
             path = generate_interactive_html(title, author, sections)
             logger.info(f"[REPORT] HTML file generated at: {path}")
-            path = os.path.abspath(path)
-        
-        # Cleanup
-        gc.collect()
-        return path
+            return os.path.abspath(path)
     except Exception as e:
         logger.error(f"Report export error: {e}", exc_info=True)
         gc.collect()
