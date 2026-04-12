@@ -2309,7 +2309,7 @@ def create_ui():
             new_files.append(path)
             
             # Returning an explicit gr.update is safer for component state synchronization
-            return gr.update(visible=True, value=new_files, show_progress="hidden")
+            return gr.update(visible=True, value=new_files)
 
         gen_md_btn.click(
             fn=handle_export,
