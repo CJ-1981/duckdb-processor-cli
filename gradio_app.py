@@ -240,7 +240,6 @@ def get_data_profiling():
             column_name AS "column",
             column_type AS "type",
             "count",
-            "null_count",
             ROUND(TRY_CAST("min" AS DOUBLE), 2) AS "min",
             ROUND(TRY_CAST("max" AS DOUBLE), 2) AS "max",
             ROUND(TRY_CAST("avg" AS DOUBLE), 2) AS "avg",
@@ -249,7 +248,7 @@ def get_data_profiling():
             ROUND(TRY_CAST("q50" AS DOUBLE), 2) AS "q50",
             ROUND(TRY_CAST("q75" AS DOUBLE), 2) AS "q75",
             ROUND(TRY_CAST("null_percentage" AS DOUBLE), 2) AS "null_percentage",
-            "distinct_count"
+            "approx_unique" AS "distinct_count"
         FROM (SUMMARIZE "{global_processor.table}")
         '''
         df_summary = global_processor.con.execute(summary_sql).df()
