@@ -1472,20 +1472,23 @@ def generate_report_markdown(title, author, sections):
     for i, s in enumerate(sections):
         logger.info(f"[MD_GEN] Processing section {i+1}: {s.get('heading')}")
         md += f"## {s['heading']}\n\n"
-        if s['type'] == "Text/Note":
-            md += f"{s['body']}\n\n"
-        elif s['type'] == "Schema Info":
+        
+        if s.get('type') == "Text/Note":
+            md += f"{s.get('body', '')}\n\n"
+        elif s.get('type') == "Schema Info":
             md += f"```sql\n{get_schema_info()}\n```\n\n"
-        elif s['type'] == "Data Summary":
+        elif s.get('type') == "Data Summary":
             info = global_processor.info() if global_processor else {}
             md += f"- **Total Rows:** {info.get('rows', '?')}\n- **Total Columns:** {len(info.get('columns', []))}\n\n"
-        else:
+        elif s.get('type') in ["Analyzer Results Table", "SQL Results Table"]:
             logger.info(f"[MD_GEN] Processing table data for section {i+1}")
             df = s.get('data')
             if df is not None:
                 md += f"```csv\n{df.to_csv(index=False)}\n```\n\n"
             else:
                 md += "_[Table data missing]_\n\n"
+        else:
+            md += "_[Unknown section type]_\n\n"
 
     path = os.path.join(TEMP_DIR, f"report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.md")
     logger.info(f"[MD_GEN] Saving to {path}")
