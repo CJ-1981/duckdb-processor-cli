@@ -1362,7 +1362,7 @@ kbd {
 def restore_session(state):
     """Restore the application state from BrowserState (localStorage)."""
     if not state or not state.get("files"):
-        return [gr.update()] * 15
+        return [gr.update()] * 16
 
     logger.info(f"[RECOVERY] Attempting to restore session from state: {state}")
     try:
