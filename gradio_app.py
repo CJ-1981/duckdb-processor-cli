@@ -915,6 +915,7 @@ def generate_interactive_html(title, author, sections):
         parts = []
         parts.append("<!doctype html><html><head><meta charset='utf-8'/>")
         parts.append(f"<title>{title or 'DuckDB Interactive Report'}</title>")
+        # DataTables: Using CDN. For offline mode, download these files and replace URLs with local paths.
         parts.append('<link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/jquery.dataTables.min.css"/>')
         parts.append("<style>body{font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial;margin:20px;background:#0f172a;color:#e6eef8} h1,h2{color:#c7d2fe} .container{max-width:1200px;margin:auto} table.dataTable{width:100% !important;background:#071026;border-collapse:collapse} table.dataTable thead th{background:#07162a;color:#e6eef8} .dt-buttons{margin-bottom:8px}</style>")
         parts.append('<script src="https://code.jquery.com/jquery-3.5.1.js"></script>')
