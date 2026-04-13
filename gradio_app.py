@@ -803,6 +803,49 @@ def upload_plugin(file_obj):
 
 # --- Report Builder Helper Functions ---
 
+def get_plugin_files():
+    """List all editable plugin files from both built-in and custom directories."""
+    files = []
+    
+    # Custom plugins
+    base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
+    plugins_dir = os.path.join(base_dir, "analysts_plugins")
+    if os.path.exists(plugins_dir):
+        for f in os.listdir(plugins_dir):
+            if f.endswith(".py") and not f.startswith("_"):
+                files.append(f"custom/{f}")
+    
+    # Built-in analyzers (read-only technically, but we'll allow loading for editing/saving as custom)
+    import duckdb_processor.analysts as analysts_pkg
+    builtin_path = analysts_pkg.__path__[0]
+    if os.path.exists(builtin_path):
+        for f in os.listdir(builtin_path):
+            if f.endswith(".py") and not f.startswith("__") and not f.startswith("_"):
+                files.append(f"built-in/{f}")
+                
+    return sorted(files)
+
+def load_plugin_file(file_path):
+    """Read the content of a selected plugin file."""
+    if not file_path:
+        return ""
+    
+    try:
+        base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
+        if file_path.startswith("custom/"):
+            full_path = os.path.join(base_dir, "analysts_plugins", file_path.replace("custom/", ""))
+        elif file_path.startswith("built-in/"):
+            import duckdb_processor.analysts as analysts_pkg
+            builtin_path = analysts_pkg.__path__[0]
+            full_path = os.path.join(builtin_path, file_path.replace("built-in/", ""))
+        else:
+            return "⚠️ Unknown file path format."
+            
+        with open(full_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        return f"❌ Error loading file: {e}"
+
 def get_report_timestamp():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1239,10 +1282,11 @@ def save_plugin_file(code):
         
         new_choices = get_analyzer_choices()
         plugin_choices = get_plugin_list()
+        file_choices = get_plugin_files()
         
-        return f"✅ Plugin '{filename}' saved to analysts_plugins/", gr.update(choices=new_choices), gr.update(choices=plugin_choices)
+        return f"✅ Plugin '{filename}' saved to analysts_plugins/", gr.update(choices=new_choices), gr.update(choices=plugin_choices), gr.update(choices=file_choices)
     except Exception as e:
-        return f"❌ Error saving plugin: {e}", gr.update(), gr.update()
+        return f"❌ Error saving plugin: {e}", gr.update(), gr.update(), gr.update()
 
 def delete_plugin_file(plugin_choice):
     """Delete a custom plugin file."""
@@ -2066,40 +2110,79 @@ def create_ui():
                                 sql_scatter_display = gr.ScatterPlot(label="SQL Scatter Chart", visible=False)
 
                     # -----------------------------
-                    # TAB 3: Advanced Analytics
+                    # TAB 3: Analyzer Plugins
                     # -----------------------------
-                    with gr.Tab("Advanced Analytics"):
-                        gr.Markdown("### Pre-built Analysis Modules")
-                        with gr.Row():
-                            with gr.Column(scale=2):
-                                analyzer_dropdown = gr.Dropdown(
-                                    choices=get_analyzer_choices(),
-                                    label="Select Analyzer",
-                                    info="Choose a specialized analysis module"
-                                )
-                                run_analysis_btn = gr.Button("🚀 Run Analysis", variant="primary")
-                            
-                            with gr.Column(scale=1):
-                                with gr.Accordion("⚙️ Analysis Options", open=False):
-                                    row_slider_ana = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows to Preview")
-                                    col_dropdown_ana = gr.Dropdown(choices=["5", "10", "20", "50", "All"], value="All", label="Columns")
-
+                    with gr.Tab("Analyzer Plugins"):
                         with gr.Tabs():
-                            with gr.Tab("📊 Analysis Results"):
-                                analysis_results = gr.Dataframe(
-                                    label="Result Data",
+                            with gr.Tab("🚀 Run Analyzers"):
+                                gr.Markdown("### Pre-built Analysis Modules")
+                                with gr.Row():
+                                    with gr.Column(scale=2):
+                                        analyzer_dropdown = gr.Dropdown(
+                                            choices=get_analyzer_choices(),
+                                            label="Select Analyzer",
+                                            info="Choose a specialized analysis module"
+                                        )
+                                        run_analysis_btn = gr.Button("🚀 Run Analysis", variant="primary")
+                                    
+                                    with gr.Column(scale=1):
+                                        with gr.Accordion("⚙️ Analysis Options", open=False):
+                                            row_slider_ana = gr.Dropdown(choices=[15, 25, 50, 100, 200], value=50, label="Rows to Preview")
+                                            col_dropdown_ana = gr.Dropdown(choices=["5", "10", "20", "50", "All"], value="All", label="Columns")
+
+                                with gr.Tabs():
+                                    with gr.Tab("📊 Analysis Results"):
+                                        analysis_results = gr.Dataframe(
+                                            label="Result Data",
+                                            interactive=False,
+                                            wrap=True,
+                                            max_height=800
+                                        )
+                                        analysis_css_override = gr.HTML("")
+
+                                    with gr.Tab("📈 Visualizer"):
+                                        ana_bar_display = gr.BarPlot(label="Analysis Bar Chart", visible=True)
+                                        ana_line_display = gr.LinePlot(label="Analysis Line Chart", visible=False)
+                                        ana_scatter_display = gr.ScatterPlot(label="Analysis Scatter Chart", visible=False)
+                            
+                            with gr.Tab("🛠️ Plugin Studio"):
+                                gr.Markdown("### Dynamic Plugin Development")
+                                with gr.Row():
+                                    with gr.Column(scale=2):
+                                        with gr.Row():
+                                            plugin_file_selector = gr.Dropdown(
+                                                choices=get_plugin_files(),
+                                                label="Edit Existing Plugin",
+                                                scale=4
+                                            )
+                                            load_plugin_btn = gr.Button("📂 Load", scale=1)
+                                            
+                                        plugin_editor = gr.Code(
+                                            label="Python Plugin Editor",
+                                            language="python",
+                                            lines=20,
+                                            value=PLUGIN_TEMPLATE
+                                        )
+                                        with gr.Row():
+                                            test_plugin_btn = gr.Button("🧪 Test Plugin (Dry Run)", variant="secondary")
+                                            new_plugin_btn = gr.Button("📄 New Template")
+                                            save_plugin_btn = gr.Button("💾 Save Plugin", variant="primary")
+
+                                    with gr.Column(scale=1):
+                                        gr.Markdown("#### Plugin Management")
+                                        plugin_status = gr.Textbox(label="Status", interactive=False)
+                                        plugin_logs = gr.Textbox(label="Console Output", lines=15)
+                                        
+                                gr.Markdown("#### Test Results")
+                                plugin_results_table = gr.Dataframe(
+                                    label="Plugin Results Table",
+                                    visible=True,
                                     interactive=False,
-                                    wrap=True,
-                                    max_height=800
+                                    row_count=(10, "dynamic"),
+                                    max_height=800,
+                                    elem_id="plugin-results-table"
                                 )
-                                analysis_css_override = gr.HTML("")
 
-                            with gr.Tab("📈 Visualizer"):
-                                ana_bar_display = gr.BarPlot(label="Analysis Bar Chart", visible=True)
-                                ana_line_display = gr.LinePlot(label="Analysis Line Chart", visible=False)
-                                ana_scatter_display = gr.ScatterPlot(label="Analysis Scatter Chart", visible=False)
-
-                    
                     # -----------------------------
                     # TAB 4: Report Builder
                     # -----------------------------
@@ -2150,38 +2233,6 @@ def create_ui():
                             )
                             gr.Markdown("*Click the download button above to save your generated report file.*", visible=False)
                             report_md_preview = gr.Markdown(visible=False)
-                    # -----------------------------
-                    # TAB 5: Plugin Studio
-                    # -----------------------------
-                    with gr.Tab("Plugin Studio"):
-                        gr.Markdown("### Dynamic Plugin Development")
-                        with gr.Row():
-                            with gr.Column(scale=2):
-                                plugin_editor = gr.Code(
-                                    label="Python Plugin Editor",
-                                    language="python",
-                                    lines=20,
-                                    value=PLUGIN_TEMPLATE
-                                )
-                                with gr.Row():
-                                    test_plugin_btn = gr.Button("🧪 Test Plugin (Dry Run)", variant="secondary")
-                                    new_plugin_btn = gr.Button("📄 New Template")
-                                    save_plugin_btn = gr.Button("💾 Save Plugin", variant="primary")
-
-                            with gr.Column(scale=1):
-                                gr.Markdown("#### Plugin Management")
-                                plugin_status = gr.Textbox(label="Status", interactive=False)
-                                plugin_logs = gr.Textbox(label="Console Output", lines=15)
-                                
-                        gr.Markdown("#### Test Results")
-                        plugin_results_table = gr.Dataframe(
-                            label="Plugin Results Table",
-                            visible=True,
-                            interactive=False,
-                            row_count=(10, "dynamic"),
-                            max_height=800,
-                            elem_id="plugin-results-table"
-                        )
 
                     with gr.Tab("Progress Monitoring"):
                         gr.Markdown("### Execution Status & Progress")
@@ -2555,7 +2606,13 @@ def create_ui():
         save_plugin_btn.click(
             fn=save_plugin_file,
             inputs=[plugin_editor],
-            outputs=[plugin_status, analyzer_dropdown, gr.State()]
+            outputs=[plugin_status, analyzer_dropdown, gr.State(), plugin_file_selector]
+        )
+
+        load_plugin_btn.click(
+            fn=load_plugin_file,
+            inputs=[plugin_file_selector],
+            outputs=[plugin_editor]
         )
 
         logger.info("[EVENT_SETUP] All event handlers wired successfully.")
