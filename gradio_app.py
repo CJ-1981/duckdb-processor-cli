@@ -384,25 +384,24 @@ def generate_auto_chart(df):
         logger.error(f"Auto-chart failed: {e}")
         return hide, hide, hide, "Bar"
 
-def get_chart_updates(df, chart_type, x_axis, y_axis, color_by=None, facet_by=None, show_trend=False):
-    """Generate updates for native Gradio plot components based on user selection.
-
-    Uses DuckDB SQL aggregations when a global_processor is available to avoid
-    manipulating DataFrames with Pandas (select_dtypes/value_counts/sort_values).
+def get_aggregated_df(df, chart_type, x_axis, y_axis, color_by=None, facet_by=None, limit=5000):
+    """
+    Generate an aggregated dataframe matching the visualizer's logic.
+    This ensures that reports and UI show consistent data.
     """
     global global_processor
-    hide = gr.update(visible=False, value=None)
-    bar_upd, line_upd, scatter_upd = hide, hide, hide
-
-    if df is None or df.empty or not chart_type:
-        return bar_upd, line_upd, scatter_upd
+    if df is None or (hasattr(df, 'empty') and df.empty):
+        return None
 
     try:
         # Default X axis
-        if not x_axis:
+        if not x_axis and hasattr(df, 'columns') and len(df.columns) > 0:
             x_axis = df.columns[0]
+            
+        if not x_axis:
+            return df.head(limit)
 
-        # Determine Y axis: prefer numeric columns discovered via DuckDB metadata
+        # Determine Y axis if missing
         if not y_axis:
             numeric_cols = []
             if global_processor is not None and getattr(global_processor, 'last_query', None) is None:
@@ -411,69 +410,98 @@ def get_chart_updates(df, chart_type, x_axis, y_axis, color_by=None, facet_by=No
                     numeric_cols = [r['column_name'] for r in col_info.to_dict('records') if any(k in (r.get('data_type') or '').lower() for k in ('int','double','float','numeric','decimal','real'))]
                 except Exception:
                     numeric_cols = []
-
-            if not numeric_cols:
-                # Lightweight pandas dtype inspection (non-mutating fallback)
+            if not numeric_cols and hasattr(df, 'columns'):
                 try:
                     numeric_cols = [c for c in df.columns if str(df[c].dtype).startswith(('int','float'))]
                 except Exception:
                     numeric_cols = []
-
+            
             if numeric_cols:
                 y_axis = numeric_cols[0]
-            else:
-                # No numeric columns: produce counts aggregated via SQL when possible
-                if global_processor is not None:
-                    source_sql = f"({global_processor.last_query})" if getattr(global_processor, 'last_query', None) else f'"{global_processor.table}"'
-                    q = f'SELECT "{x_axis}" as x, COUNT(*) as count FROM {source_sql} GROUP BY 1 ORDER BY count DESC LIMIT 100'
-                    df_plot = global_processor.con.execute(q).df()
-                    y_axis = 'count'
-                else:
-                    # Build frequency counts without pandas groupby/value_counts
-                    from collections import Counter
-                    vals = [v for v in df[x_axis]]
-                    counts = Counter(vals)
-                    counts_list = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
-                    df_plot = pd.DataFrame([{'x': k, 'count': v} for k, v in counts_list])
-                    y_axis = 'count'
 
-                bar_upd = gr.update(value=df_plot, x='x' if 'x' in df_plot.columns else x_axis, y=y_axis, visible=True, title=f"{y_axis} by {x_axis}")
-                # Return choices as well to update dropdowns correctly
-                return bar_upd, hide, hide
-
-        # Chart-specific rendering using SQL aggregations when possible
-        if chart_type == 'Bar':
-            if global_processor is not None and getattr(global_processor, 'last_query', None) is not None:
-                # Sanitize last_query (remove comments)
+        # SQL Source determination
+        source_sql = None
+        if global_processor is not None:
+            if getattr(global_processor, "last_query", None):
                 base_query = global_processor.last_query
                 base_query = re.sub(r"(--.*?(?=(?:'[^']*'[^']*')*[^']*$))", "", base_query)
                 base_query = re.sub(r'/\*.*?\*/', '', base_query, flags=re.DOTALL)
                 source_sql = f"({base_query})"
             else:
                 source_sql = f'"{global_processor.table}"'
+
+        # Determine grouping columns
+        groups = [x_axis]
+        if color_by and color_by != "None" and color_by in df.columns:
+            groups.append(color_by)
+        if facet_by and facet_by != "None" and facet_by in df.columns:
+            groups.append(facet_by)
+        
+        group_cols_str = ", ".join([f'"{g}"' for g in groups])
+
+        if chart_type in ['Bar', 'Line']:
+            if source_sql:
+                agg_func = f'SUM(TRY_CAST("{y_axis}" AS DOUBLE))' if y_axis else 'COUNT(*)'
+                order_by = "y DESC" if chart_type == 'Bar' else f'"{x_axis}" ASC'
+                q = f'SELECT {group_cols_str}, {agg_func} AS y FROM {source_sql} GROUP BY {group_cols_str} ORDER BY {order_by} LIMIT {limit}'
+                return global_processor.con.execute(q).df()
+            else:
+                # Pandas fallback
+                if y_axis:
+                    agg = df.groupby(groups)[y_axis].sum().reset_index()
+                    agg.rename(columns={y_axis: 'y'}, inplace=True)
+                else:
+                    agg = df.groupby(groups).size().reset_index(name='y')
                 
-            q = f'SELECT "{x_axis}" AS x, SUM(TRY_CAST("{y_axis}" AS DOUBLE)) AS y FROM {source_sql} GROUP BY 1 ORDER BY y DESC LIMIT 100'
-            plot_df = global_processor.con.execute(q).df()
-            bar_upd = gr.update(value=plot_df, x='x', y='y', visible=True, title=f"{y_axis} by {x_axis}")
+                if chart_type == 'Bar':
+                    return agg.sort_values(by='y', ascending=False).head(limit)
+                else:
+                    return agg.sort_values(by=x_axis).head(limit)
+
+        elif chart_type == 'Scatter':
+            return df.head(limit)
+
+        return df.head(limit)
+    except Exception as e:
+        logger.error(f"Failed to aggregate data: {e}")
+        return df.head(limit) if df is not None else None
+
+def get_chart_updates(df, chart_type, x_axis, y_axis, color_by=None, facet_by=None, show_trend=False):
+    """Generate updates for native Gradio plot components based on user selection."""
+    hide = gr.update(visible=False, value=None)
+    bar_upd, line_upd, scatter_upd = hide, hide, hide
+
+    if df is None or (hasattr(df, 'empty') and df.empty) or not chart_type:
+        return bar_upd, line_upd, scatter_upd
+
+    try:
+        # Use common aggregation logic (UI limit is smaller for performance)
+        plot_df = get_aggregated_df(df, chart_type, x_axis, y_axis, color_by, facet_by, limit=100)
+        
+        if plot_df is None:
+            return bar_upd, line_upd, scatter_upd
+
+        # Determine effective X and Y column names in the plot_df
+        # get_aggregated_df uses original x_axis name but always names aggregated Y as 'y'
+        eff_x = x_axis if x_axis in plot_df.columns else plot_df.columns[0]
+        eff_y = 'y' if 'y' in plot_df.columns else (y_axis if y_axis in plot_df.columns else plot_df.columns[-1])
+
+        if chart_type == 'Bar':
+            bar_upd = gr.update(value=plot_df, x=eff_x, y=eff_y, 
+                                color=color_by if color_by and color_by != 'None' and color_by in plot_df.columns else None,
+                                visible=True, title=f"{y_axis or 'Count'} by {x_axis}")
             return bar_upd, hide, hide
 
         if chart_type == 'Line':
-            if global_processor is not None and getattr(global_processor, 'last_query', None) is not None:
-                # Sanitize last_query (remove comments)
-                base_query = global_processor.last_query
-                base_query = re.sub(r"(--.*?(?=(?:'[^']*'[^']*')*[^']*$))", "", base_query)
-                base_query = re.sub(r'/\*.*?\*/', '', base_query, flags=re.DOTALL)
-                source_sql = f"({base_query})"
-            else:
-                source_sql = f'"{global_processor.table}"'
-
-            q = f'SELECT "{x_axis}" AS x, SUM(TRY_CAST("{y_axis}" AS DOUBLE)) AS y FROM {source_sql} GROUP BY 1 ORDER BY x'
-            plot_df = global_processor.con.execute(q).df()
-            line_upd = gr.update(value=plot_df, x='x', y='y', visible=True, title=f"{y_axis} over {x_axis}")
+            line_upd = gr.update(value=plot_df, x=eff_x, y=eff_y, 
+                                 color=color_by if color_by and color_by != 'None' and color_by in plot_df.columns else None,
+                                 visible=True, title=f"{y_axis or 'Count'} over {x_axis}")
             return hide, line_upd, hide
 
         if chart_type == 'Scatter':
-            scatter_upd = gr.update(value=df, x=x_axis, y=y_axis, color=color_by if color_by and color_by != 'None' else None, visible=True, title=f"{y_axis} vs {x_axis}")
+            scatter_upd = gr.update(value=plot_df, x=eff_x, y=eff_y, 
+                                    color=color_by if color_by and color_by != 'None' and color_by in plot_df.columns else None, 
+                                    visible=True, title=f"{y_axis or 'Value'} vs {x_axis}")
             return hide, hide, scatter_upd
 
         return hide, hide, hide
@@ -892,16 +920,17 @@ def add_report_section(sections, s_type, s_heading, s_body, sql_df, analysis_df,
                 df_to_use = analysis_df
 
             if df_to_use is not None:
-                snapshot = df_to_use.copy(deep=True)
+                # Capture an aggregated snapshot that matches the UI visualizer
+                snapshot = get_aggregated_df(df_to_use, chart_type, x_axis, y_axis, color_by, facet_by)
                 chart_meta = {
                     "type": chart_type,
-                    "x": x_axis,
-                    "y": y_axis,
+                    "x": 'x' if (snapshot is not None and 'x' in snapshot.columns) else x_axis,
+                    "y": 'y' if (snapshot is not None and 'y' in snapshot.columns) else y_axis,
                     "color": color_by,
                     "facet": facet_by,
                     "trend": show_trend
                 }
-                logger.info(f"[REPORT_ADD] Captured Chart snapshot for '{s_heading}'. Type: {chart_type}")
+                logger.info(f"[REPORT_ADD] Captured Aggregated Chart snapshot for '{s_heading}'. Type: {chart_type}")
             else:
                 logger.warning(f"[REPORT_ADD] No data available for chart '{s_heading}'.")
         
@@ -1163,30 +1192,44 @@ def generate_interactive_html(title, author, sections, theme="Dark (Default)"):
 
                             console.log("Rendering chart " + chartId + " of type " + type);
 
-                            let trace = {{
-                                x: data.map(r => r[x_col]),
-                                y: data.map(r => r[y_col]),
-                                type: type.toLowerCase() === "line" ? "scatter" : (type.toLowerCase() === "scatter" ? "scatter" : "bar"),
-                                mode: type.toLowerCase() === "line" ? "lines+markers" : (type.toLowerCase() === "scatter" ? "markers" : undefined),
-                                marker: {{ color: "{trace_color}", size: 8 }}
-                            }};
+                            let traces = [];
+                            if (color_col && color_col !== "None" && color_col !== "null" && data.length > 0 && data[0].hasOwnProperty(color_col)) {
+                                // Grouped data (multiple series)
+                                const groups = [...new Set(data.map(r => r[color_col]))];
+                                groups.forEach(g => {
+                                    const groupData = data.filter(r => r[color_col] === g);
+                                    traces.push({
+                                        name: String(g),
+                                        x: groupData.map(r => r[x_col]),
+                                        y: groupData.map(r => r[y_col]),
+                                        type: type.toLowerCase() === "line" ? "scatter" : (type.toLowerCase() === "scatter" ? "scatter" : "bar"),
+                                        mode: type.toLowerCase() === "line" ? "lines+markers" : (type.toLowerCase() === "scatter" ? "markers" : undefined)
+                                    });
+                                });
+                            } else {
+                                // Single series
+                                traces.push({
+                                    x: data.map(r => r[x_col]),
+                                    y: data.map(r => r[y_col]),
+                                    type: type.toLowerCase() === "line" ? "scatter" : (type.toLowerCase() === "scatter" ? "scatter" : "bar"),
+                                    mode: type.toLowerCase() === "line" ? "lines+markers" : (type.toLowerCase() === "scatter" ? "markers" : undefined),
+                                    marker: { color: "{trace_color}", size: 8 }
+                                });
+                            }
 
-                            if (color_col && color_col !== "None" && color_col !== "null") {{
-                                trace.marker.color = data.map(r => r[color_col]);
-                            }}
-
-                            const layout = {{
+                            const layout = {
                                 paper_bgcolor: "rgba(0,0,0,0)",
                                 plot_bgcolor: "rgba(0,0,0,0)",
-                                font: {{ color: "{font_color}" }},
-                                margin: {{ t: 40, b: 60, l: 60, r: 40 }},
-                                xaxis: {{ title: x_col, gridcolor: "{grid_color}", zerolinecolor: "{grid_color}" }},
-                                yaxis: {{ title: y_col, gridcolor: "{grid_color}", zerolinecolor: "{grid_color}" }},
-                                title: {{ text: "{s.get('heading','')}", font: {{ size: 18 }} }},
-                                autosize: true
-                            }};
+                                font: { color: "{font_color}" },
+                                margin: { t: 40, b: 60, l: 60, r: 40 },
+                                xaxis: { title: x_col, gridcolor: "{grid_color}", zerolinecolor: "{grid_color}" },
+                                yaxis: { title: y_col, gridcolor: "{grid_color}", zerolinecolor: "{grid_color}" },
+                                title: { text: "{s.get('heading','')}", font: { size: 18 } },
+                                autosize: true,
+                                barmode: 'group'
+                            };
 
-                            Plotly.newPlot(chartId, [trace], layout, {{responsive: true}});
+                            Plotly.newPlot(chartId, traces, layout, {responsive: true});
                         }} catch (e) {{
                             console.error("Error rendering chart {chart_id}:", e);
                             document.getElementById("{chart_id}").innerHTML = "⚠️ Error rendering chart: " + e.message;
