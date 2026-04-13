@@ -109,6 +109,8 @@ logs/
 *.temp
 *.bak
 *.backup
+input/
+output/
 
 # ===========================================
 # Backups
@@ -216,3 +218,14 @@ test_output.*
 .gradio_session.json
 duck_report_*.md
 duck_report_*.pdf
+output/vdn_comparison_results_20260410_134714.csv
+util/vdn-compare/release/vdn-compare-r2.zip
+util/vdn-compare/release/vdn-compare-r3.zip
+util/vdn-compare/release/vdn-compare-r1/requirements.txt
+util/vdn-compare/release/vdn-compare-r1/vdn_compare.py
+util/vdn-compare/release/vdn-compare-r2/requirements.txt
+util/vdn-compare/release/vdn-compare-r2/vdn_compare.py
+util/vdn-compare/release/vdn-compare-r3/config.json
+util/vdn-compare/release/vdn-compare-r3/README.md
+util/vdn-compare/release/vdn-compare-r3/requirements.txt
+util/vdn-compare/release/vdn-compare-r3/vdn_compare.py
