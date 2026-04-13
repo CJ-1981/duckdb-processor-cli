@@ -1075,11 +1075,18 @@ def load_plugin_code(plugin_choice):
     except Exception as e:
         return f"# Error loading plugin: {e}", "", f"❌ Error: {e}"
 
-def save_plugin_file(plugin_name, code):
+def save_plugin_file(code):
     """Save the provided code to a custom plugin file."""
-    if not plugin_name or not code:
-        return "⚠️ Please provide a name and some code.", gr.update(), gr.update()
+    if not code:
+        return "⚠️ Please provide some code.", gr.update(), gr.update()
         
+    # Extract name for the filename
+    # Simple heuristic: look for name = "..."
+    name_match = re.search(r'name\s*=\s*["\']([^"\']+)["\']', code)
+    if not name_match:
+        return "❌ Error: Could not find 'name' attribute in the plugin class (e.g., name = \"my_plugin\").", gr.update(), gr.update()
+        
+    plugin_name = name_match.group(1)
     filename = plugin_name if plugin_name.endswith(".py") else f"{plugin_name}.py"
     
     # Basic validation: must contain @register and BaseAnalyzer
@@ -1221,7 +1228,12 @@ def test_custom_plugin(code):
                 result_df = global_processor.last_result
                 
                 log_output = stdout_buffer.getvalue() or "Plugin executed with no console output."
-                return f"✅ Plugin '{analyzer_instance.name}' tested successfully!", result_df, log_output
+                return (
+                    f"✅ Plugin '{analyzer_instance.name}' tested successfully!", 
+                    result_df, 
+                    log_output,
+                    gr.update(visible=True)
+                )
                 
         finally:
             if os.path.exists(tmp_path):
@@ -1230,7 +1242,12 @@ def test_custom_plugin(code):
     except Exception as e:
         error_trace = traceback.format_exc()
         logger.error(f"Plugin test error: {e}")
-        return f"❌ Execution Error: {e}", None, stdout_buffer.getvalue() + "\n" + error_trace
+        return (
+            f"❌ Execution Error: {e}", 
+            None, 
+            stdout_buffer.getvalue() + "\n" + error_trace,
+            gr.update(visible=False)
+        )
 
 # Custom CSS for DataGrip-inspired UI
 custom_css = """
@@ -1523,52 +1540,84 @@ def generate_report_markdown(title, author, sections):
     return path
 def test_analyzer_plugin(code):
     """Execute a plugin's code in a sandbox-like environment for testing."""
+    logger.info("[PLUGIN_TEST] Starting test run...")
     if not code:
-        return "⚠️ No code to test.", None, ""
+        return "⚠️ No code to test.", gr.update(visible=False), ""
     
+    if global_processor is None:
+        logger.warning("[PLUGIN_TEST] global_processor is None")
+        return "❌ Error: No data loaded. Please load a file first in the Data Preview tab.", gr.update(visible=False), ""
+
     stdout_buffer = io.StringIO()
+    tmp_path = None
     try:
+        # 1. Write code to a temp file
+        with tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w") as tmp:
+            tmp.write(code)
+            tmp_path = tmp.name
+        logger.info(f"[PLUGIN_TEST] Wrote temp file: {tmp_path}")
+        
         with contextlib.redirect_stdout(stdout_buffer):
-            # 1. Write code to a temp file
-            with tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w") as tmp:
-                tmp.write(code)
-                tmp_path = tmp.name
+            # 2. Import it dynamically
+            spec = importlib.util.spec_from_file_location("test_plugin_mod", tmp_path)
+            if not spec or not spec.loader:
+                raise ImportError("Could not create module spec or loader")
+                
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            logger.info("[PLUGIN_TEST] Module executed")
             
-            try:
-                # 2. Import it dynamically
-                spec = importlib.util.spec_from_file_location("test_plugin_mod", tmp_path)
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
+            # 3. Find the Analyzer class
+            analyzer_cls = None
+            for attr_name in dir(module):
+                attr = getattr(module, attr_name)
+                if (inspect.isclass(attr) and 
+                    attr.__module__ == "test_plugin_mod" and 
+                    "BaseAnalyzer" in [base.__name__ for base in inspect.getmro(attr)]):
+                    analyzer_cls = attr
+                    break
+            
+            if not analyzer_cls:
+                raise gr.Error("No BaseAnalyzer subclass found in the code. Ensure you have a class inheriting from BaseAnalyzer and it is decorated with @register.")
+            
+            # 4. Run it
+            logger.info(f"[PLUGIN_TEST] Running analyzer: {analyzer_cls.__name__}")
+            analyzer_instance = analyzer_cls()
+            analyzer_instance.run(global_processor)
+            result_df = global_processor.last_result
+            
+            if result_df is not None:
+                logger.info(f"[PLUGIN_TEST] Success. Result shape: {result_df.shape}")
+                logger.info("[PLUGIN_TEST] Returning visible=True for dataframe")
+            else:
+                logger.info("[PLUGIN_TEST] Success. No result dataframe returned.")
+                logger.info("[PLUGIN_TEST] Returning visible=False for dataframe")
                 
-                # 3. Find the Analyzer class
-                analyzer_cls = None
-                for attr_name in dir(module):
-                    attr = getattr(module, attr_name)
-                    if (inspect.isclass(attr) and 
-                        attr.__module__ == "test_plugin_mod" and 
-                        "BaseAnalyzer" in [base.__name__ for base in inspect.getmro(attr)]):
-                        analyzer_cls = attr
-                        break
-                
-                if not analyzer_cls:
-                    raise gr.Error("No BaseAnalyzer subclass found in the code.")
-                
-                # 4. Run it
-                analyzer_instance = analyzer_cls()
-                analyzer_instance.run(global_processor)
-                result_df = global_processor.last_result
-                
-                gr.Info(f"Plugin '{analyzer_instance.name}' tested successfully!")
-                return f"✅ Success: {analyzer_instance.name}", result_df, stdout_buffer.getvalue()
-            finally:
-                if os.path.exists(tmp_path): os.remove(tmp_path)
+            gr.Info(f"Plugin '{analyzer_instance.name}' tested successfully!")
+            ret = (
+                f"✅ Success: {analyzer_instance.name}", 
+                result_df,
+                stdout_buffer.getvalue()
+            )
+            logger.info(f"[PLUGIN_TEST] Returning: {ret[0]}")
+            return ret
+
     except Exception as e:
-        logger.error(f"Plugin test error: {e}")
-        return f"❌ Error: {e}", None, stdout_buffer.getvalue() + "\n" + traceback.format_exc()
+        error_msg = f"❌ Error: {e}"
+        logger.error(f"[PLUGIN_TEST] {error_msg}")
+        trace = traceback.format_exc()
+        return error_msg, gr.update(visible=False), stdout_buffer.getvalue() + "\n" + trace
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+                logger.info(f"[PLUGIN_TEST] Cleaned up: {tmp_path}")
+            except:
+                pass
 
 def create_new_plugin_template():
     """Return a fresh plugin template."""
-    return PLUGIN_TEMPLATE, "new_analysis_module", "Template loaded."
+    return PLUGIN_TEMPLATE, "Template loaded."
 
 def create_ui():
     # DataGrip-inspired custom theme with grayscale palette
@@ -1978,15 +2027,15 @@ def create_ui():
 
                             with gr.Column(scale=1):
                                 gr.Markdown("#### Plugin Management")
-                                plugin_name_input = gr.Textbox(label="Plugin Name (e.g. my_analysis)", placeholder="my_analysis")
                                 plugin_status = gr.Textbox(label="Status", interactive=False)
-                                plugin_logs = gr.Code(label="Console Output", language="python", lines=15)
+                                plugin_logs = gr.Textbox(label="Console Output", lines=15)
                                 
                         gr.Markdown("#### Test Results")
                         plugin_results_table = gr.Dataframe(
                             label="Plugin Results Table",
-                            visible=False,
-                            row_count=(25, "dynamic"),
+                            visible=True,
+                            interactive=False,
+                            row_count=(10, "dynamic"),
                             max_height=800,
                             elem_id="plugin-results-table"
                         )
@@ -2340,16 +2389,16 @@ def create_ui():
             fn=test_analyzer_plugin,
             inputs=[plugin_editor],
             outputs=[plugin_status, plugin_results_table, plugin_logs]
-        ).then(lambda df: gr.update(visible=df is not None), inputs=[plugin_results_table], outputs=[plugin_results_table])
+        )
 
         new_plugin_btn.click(
             fn=create_new_plugin_template,
-            outputs=[plugin_editor, plugin_name_input, plugin_status]
+            outputs=[plugin_editor, plugin_status]
         )
 
         save_plugin_btn.click(
             fn=save_plugin_file,
-            inputs=[plugin_name_input, plugin_editor],
+            inputs=[plugin_editor],
             outputs=[plugin_status, analyzer_dropdown, gr.State()]
         )
 
