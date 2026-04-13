@@ -1092,8 +1092,10 @@ def save_plugin_file(plugin_name, code):
         os.makedirs(plugins_dir, exist_ok=True)
         
         save_path = os.path.join(plugins_dir, filename)
+        logger.info(f"[PLUGIN_SAVE] Saving to {save_path}")
         with open(save_path, "w") as f:
             f.write(code)
+        logger.info(f"[PLUGIN_SAVE] Saved successfully. Content length: {len(code)}")
             
         # Reset discovery flag to force reload
         import duckdb_processor.analyzer as analyzer_mod
