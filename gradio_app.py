@@ -648,21 +648,22 @@ def run_analysis(analyzer_name, max_rows, max_cols, progress=gr.Progress()):
         bar_upd, line_upd, scatter_upd, selected_type = generate_auto_chart(df)
         cols = df.columns.tolist()
         choices_with_none = [None] + cols
-        
+
         progress(1.0, desc="Done!")
         return (
-            gr.update(value=df, max_height=height_px), 
-            style_injection, 
+            gr.update(value=df, max_height=height_px),
+            style_injection,
             bar_upd,
             line_upd,
             scatter_upd,
             gr.update(value=selected_type),          # Update chart type dropdown
-            df,                                      # For gr.State
+            df,                                      # For gr.State (analysis_state)
             gr.update(choices=cols, value=cols[0]),  # X-Axis
             gr.update(choices=cols, value=cols[1] if len(cols) > 1 else cols[0]), # Y-Axis
             gr.update(choices=choices_with_none, value=None), # Color By
             gr.update(choices=choices_with_none, value=None)  # Facet By
         )
+
     except Exception as e:
         error_msg = f"Analysis Failed: {e}"
         logger.error(error_msg)
@@ -2153,29 +2154,6 @@ def create_ui():
                                 )
                                 sql_css_override = gr.HTML("")
 
-                            with gr.Tab("📈 Visualizer"):
-                                with gr.Accordion("🎨 Chart Configuration", open=True):
-                                    with gr.Row():
-                                        sql_chart_type = gr.Dropdown(
-                                            choices=["Bar", "Line", "Scatter"],
-                                            value="Bar",
-                                            label="Chart Type"
-                                        )
-                                        sql_x_axis = gr.Dropdown(choices=[], label="X-Axis")
-                                        sql_y_axis = gr.Dropdown(choices=[], label="Y-Axis")
-
-                                    with gr.Row():
-                                        sql_color_by = gr.Dropdown(choices=[], label="Color By")
-                                        sql_facet_by = gr.Dropdown(choices=[], label="Facet By")
-
-                                    with gr.Row():
-                                        sql_show_trend = gr.Checkbox(label="Show Trend Line (Scatter Only)", value=False)
-
-                                # Native Gradio Plots - Auto-theme sync
-                                sql_bar_display = gr.BarPlot(label="SQL Bar Chart", visible=True)
-                                sql_line_display = gr.LinePlot(label="SQL Line Chart", visible=False)
-                                sql_scatter_display = gr.ScatterPlot(label="SQL Scatter Chart", visible=False)
-
                     # -----------------------------
                     # TAB 3: Analyzer Plugins
                     # -----------------------------
@@ -2207,11 +2185,6 @@ def create_ui():
                                         )
                                         analysis_css_override = gr.HTML("")
 
-                                    with gr.Tab("📈 Visualizer"):
-                                        ana_bar_display = gr.BarPlot(label="Analysis Bar Chart", visible=True)
-                                        ana_line_display = gr.LinePlot(label="Analysis Line Chart", visible=False)
-                                        ana_scatter_display = gr.ScatterPlot(label="Analysis Scatter Chart", visible=False)
-                            
                             with gr.Tab("🛠️ Plugin Studio"):
                                 gr.Markdown("### Dynamic Plugin Development")
                                 with gr.Row():
@@ -2251,7 +2224,40 @@ def create_ui():
                                 )
 
                     # -----------------------------
-                    # TAB 4: Report Builder
+                    # TAB 4: Visualizer (Common)
+                    # -----------------------------
+                    with gr.Tab("📈 Visualizer"):
+                        with gr.Accordion("🎨 Chart Configuration", open=True):
+                            with gr.Row():
+                                viz_source = gr.Radio(
+                                    choices=["SQL Query Editor", "Analyzer Plugins"],
+                                    value="SQL Query Editor",
+                                    label="Data Source",
+                                    info="Select which results to visualize"
+                                )
+                            with gr.Row():
+                                sql_chart_type = gr.Dropdown(
+                                    choices=["Bar", "Line", "Scatter"],
+                                    value="Bar",
+                                    label="Chart Type"
+                                )
+                                sql_x_axis = gr.Dropdown(choices=[], label="X-Axis")
+                                sql_y_axis = gr.Dropdown(choices=[], label="Y-Axis")
+
+                            with gr.Row():
+                                sql_color_by = gr.Dropdown(choices=[], label="Color By")
+                                sql_facet_by = gr.Dropdown(choices=[], label="Facet By")
+
+                            with gr.Row():
+                                sql_show_trend = gr.Checkbox(label="Show Trend Line (Scatter Only)", value=False)
+
+                        # Native Gradio Plots - Auto-theme sync
+                        sql_bar_display = gr.BarPlot(label="Visualizer Bar Chart", visible=True)
+                        sql_line_display = gr.LinePlot(label="Visualizer Line Chart", visible=False)
+                        sql_scatter_display = gr.ScatterPlot(label="Visualizer Scatter Chart", visible=False)
+
+                    # -----------------------------
+                    # TAB 5: Report Builder
                     # -----------------------------
                     with gr.Tab("Report Builder"):
                         gr.Markdown("### Multi-Section Analysis Report")
@@ -2482,6 +2488,8 @@ def create_ui():
             ],
             api_name="execute_sql"
         )
+        # Also auto-switch source to SQL when running SQL
+        run_sql_btn.click(fn=lambda: "SQL Query Editor", outputs=viz_source)
         logger.info("[EVENT_SETUP] ✓ run_sql_btn.click → handle_run_sql")
 
         format_btn.click(
@@ -2565,13 +2573,33 @@ def create_ui():
         logger.info("[EVENT_SETUP] ✓ sql_export_xlsx_btn.click → handle_export_xlsx")
 
         # Manual chart controls - regenerate chart when parameters change
-        def handle_manual_chart_params(chart_type, x_col, y_col, color_col, facet_col, show_trend, df):
-            """Handle manual chart parameter changes."""
+        def handle_manual_chart_params(viz_source, chart_type, x_col, y_col, color_col, facet_col, show_trend, sql_df, analysis_df):
+            """Handle manual chart parameter changes based on selected source."""
+            df = sql_df if viz_source == "SQL Query Editor" else analysis_df
             log_event("chart_params_change", chart_type, x_col, y_col)
             return get_chart_updates(df, chart_type, x_col, y_col, color_col, facet_col, show_trend)
 
+        def handle_viz_source_change(viz_source, sql_df, analysis_df):
+            """Switch visualizer data source and update auto-charts."""
+            df = sql_df if viz_source == "SQL Query Editor" else analysis_df
+            if df is None:
+                hide = gr.update(visible=False, value=None)
+                return hide, hide, hide, gr.update(), gr.update(choices=[]), gr.update(choices=[]), gr.update(choices=[]), gr.update(choices=[])
+            
+            bar_upd, line_upd, scatter_upd, selected_type = generate_auto_chart(df)
+            cols = df.columns.tolist()
+            choices_with_none = [None] + cols
+            return (
+                bar_upd, line_upd, scatter_upd,
+                gr.update(value=selected_type),
+                gr.update(choices=cols, value=cols[0]),
+                gr.update(choices=cols, value=cols[1] if len(cols) > 1 else cols[0]),
+                gr.update(choices=choices_with_none, value=None),
+                gr.update(choices=choices_with_none, value=None)
+            )
+
         # Wire up manual chart controls
-        chart_inputs = [sql_chart_type, sql_x_axis, sql_y_axis, sql_color_by, sql_facet_by, sql_show_trend, sql_state]
+        chart_inputs = [viz_source, sql_chart_type, sql_x_axis, sql_y_axis, sql_color_by, sql_facet_by, sql_show_trend, sql_state, analysis_state]
         chart_outputs = [sql_bar_display, sql_line_display, sql_scatter_display]
 
         sql_chart_type.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
@@ -2581,7 +2609,14 @@ def create_ui():
         sql_facet_by.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
         sql_show_trend.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
 
-        
+        viz_source.change(
+            fn=handle_viz_source_change, 
+            inputs=[viz_source, sql_state, analysis_state], 
+            outputs=[
+                sql_bar_display, sql_line_display, sql_scatter_display,
+                sql_chart_type, sql_x_axis, sql_y_axis, sql_color_by, sql_facet_by
+            ]
+        )
         
         # Analyzer Button Handler
         run_analysis_btn.click(
@@ -2590,9 +2625,9 @@ def create_ui():
             outputs=[
                 analysis_results,
                 analysis_css_override,
-                ana_bar_display,
-                ana_line_display,
-                ana_scatter_display,
+                sql_bar_display,
+                sql_line_display,
+                sql_scatter_display,
                 sql_chart_type,
                 analysis_state,
                 sql_x_axis,
@@ -2601,6 +2636,8 @@ def create_ui():
                 sql_facet_by
             ]
         )
+        # Also auto-switch source to Analyzer when running analysis
+        run_analysis_btn.click(fn=lambda: "Analyzer Plugins", outputs=viz_source)
 
         # Report Builder Handlers
         add_section_btn.click(
