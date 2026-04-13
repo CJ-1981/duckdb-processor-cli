@@ -87,7 +87,36 @@ python3 -m duckdb_processor test_data.csv --run my_analysis
 
 ---
 
-## Method 5: Packaging for Windows (PyInstaller)
+## Method 6: Multi-File Join (Advanced)
+
+You can load multiple files and join them in interactive mode or via Python.
+
+```bash
+# Start interactive mode with two files
+python3 -m duckdb_processor sales.csv:sales users.csv:users --interactive
+```
+
+Then join them in SQL:
+```sql
+sql> SELECT sales.*, users.name 
+     FROM sales 
+     JOIN users ON sales.user_id = users.id 
+     LIMIT 10;
+```
+
+Or via Python:
+```python
+python3 -c "
+from duckdb_processor import load
+from duckdb_processor.config import ProcessorConfig
+p = load(ProcessorConfig(files=['sales.csv:sales', 'users.csv:users']))
+print(p.sql('SELECT s.*, u.name FROM sales s JOIN users u ON s.user_id = u.id').to_string(index=False))
+"
+```
+
+---
+
+## Method 7: Packaging for Windows (PyInstaller)
 
 You can package its application into standalone Windows executables (`.exe`) that do not require Python to be installed on the target machine.
 

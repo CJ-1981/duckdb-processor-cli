@@ -18,16 +18,15 @@ from duckdb_processor.cli import build_arg_parser, main
 
 class TestCLIArgumentParsing:
     """Characterization tests for CLI argument parsing."""
-
     def test_default_arguments(self):
         """Test default argument values."""
         parser = build_arg_parser()
         args = parser.parse_args(['test.csv'])
 
-        assert args.file == 'test.csv'
+        assert args.files == ['test.csv']
+        assert args.table == 'data'
         assert args.header is None
         assert args.kv is None
-        assert args.table == 'data'
         assert args.run is None
         assert args.list_analyzers is False
         assert args.interactive is False

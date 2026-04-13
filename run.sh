@@ -76,6 +76,9 @@ pip install --quiet -e .
 echo -e "${YELLOW}  → Installing UI dependencies (Gradio, etc.)...${NC}"
 pip install --quiet -e ".[ui]"
 
+# Ensure mistletoe & itables are installed
+pip install --quiet mistletoe itables
+
 if [ $? -ne 0 ]; then
     echo -e "${RED}✗ Failed to install dependencies${NC}"
     exit 1

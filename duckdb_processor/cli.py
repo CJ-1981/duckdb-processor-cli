@@ -42,7 +42,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=epilog,
     )
-    ap.add_argument("file", nargs="?", help="CSV file path (omit for stdin)")
+    ap.add_argument("files", nargs="*", help="CSV file paths optionally with table mappings like file.csv:table (omit for stdin)")
 
     # Header options
     hg = ap.add_mutually_exclusive_group()
@@ -167,10 +167,10 @@ def main(argv: list[str] | None = None) -> Processor | None:
         return None
 
     # ── If no file given and running interactively, offer a file dialog ───
-    if args.file is None and sys.stdin.isatty():
+    if not args.files and sys.stdin.isatty():
         selected = prompt_file_dialog()
         if selected:
-            args.file = selected
+            args.files = [selected]
         else:
             print("No input file selected. Exiting.")
             sys.exit(0)
@@ -186,7 +186,7 @@ def main(argv: list[str] | None = None) -> Processor | None:
                 col_names.append(item.strip())
 
     config = ProcessorConfig(
-        file=args.file,
+        files=args.files,
         header=args.header,
         kv=args.kv,
         col_names=col_names,
