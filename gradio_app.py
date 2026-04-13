@@ -501,7 +501,8 @@ def get_chart_updates(df, chart_type, x_axis, y_axis, color_by=None, facet_by=No
         if chart_type == 'Scatter':
             scatter_upd = gr.update(value=plot_df, x=eff_x, y=eff_y, 
                                     color=color_by if color_by and color_by != 'None' and color_by in plot_df.columns else None, 
-                                    visible=True, title=f"{y_axis or 'Value'} vs {x_axis}")
+                                    visible=True, title=f"{y_axis or 'Value'} vs {x_axis}",
+                                    trend_line="ols" if show_trend else None)
             return hide, hide, scatter_upd
 
         return hide, hide, hide
@@ -1189,32 +1190,87 @@ def generate_interactive_html(title, author, sections, theme="Dark (Default)"):
                             const color_col = "{color}";
                             const type = "{c_type}";
                             const chartId = "{chart_id}";
+                            const showTrend = {"true" if cm.get("trend") else "false"};
 
-                            console.log("Rendering chart " + chartId + " of type " + type);
+                            console.log("Rendering chart " + chartId + " of type " + type + (showTrend ? " with trend" : ""));
 
                             let traces = [];
+                            
+                            // Helper for linear regression
+                            function addTrendLine(xData, yData, name, color) {{
+                                const n = xData.length;
+                                let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+                                let validPoints = 0;
+                                
+                                for (let i = 0; i < n; i++) {{
+                                    const x = parseFloat(x_col === "x" ? xData[i] : xData[i]); // Original x axis might be non-numeric
+                                    const y = parseFloat(yData[i]);
+                                    if (!isNaN(x) && !isNaN(y)) {{
+                                        sumX += x;
+                                        sumY += y;
+                                        sumXY += x * y;
+                                        sumXX += x * x;
+                                        validPoints++;
+                                    }}
+                                }}
+                                
+                                if (validPoints < 2) return null;
+                                
+                                const slope = (validPoints * sumXY - sumX * sumY) / (validPoints * sumXX - sumX * sumX);
+                                const intercept = (sumY - slope * sumX) / validPoints;
+                                
+                                const xMin = Math.min(...xData.filter(v => !isNaN(parseFloat(v))));
+                                const xMax = Math.max(...xData.filter(v => !isNaN(parseFloat(v))));
+                                
+                                return {{
+                                    x: [xMin, xMax],
+                                    y: [slope * xMin + intercept, slope * xMax + intercept],
+                                    type: 'scatter',
+                                    mode: 'lines',
+                                    name: name + ' (Trend)',
+                                    line: {{ dash: 'dot', width: 2, color: color || '#ff7f0e' }},
+                                    showlegend: true
+                                }};
+                            }}
+
                             if (color_col && color_col !== "None" && color_col !== "null" && data.length > 0 && data[0].hasOwnProperty(color_col)) {{
                                 // Grouped data (multiple series)
                                 const groups = [...new Set(data.map(r => r[color_col]))];
                                 groups.forEach(g => {{
                                     const groupData = data.filter(r => r[color_col] === g);
+                                    const xVals = groupData.map(r => r[x_col]);
+                                    const yVals = groupData.map(r => r[y_col]);
+                                    
                                     traces.push({{
                                         name: String(g),
-                                        x: groupData.map(r => r[x_col]),
-                                        y: groupData.map(r => r[y_col]),
+                                        x: xVals,
+                                        y: yVals,
                                         type: type.toLowerCase() === "line" ? "scatter" : (type.toLowerCase() === "scatter" ? "scatter" : "bar"),
                                         mode: type.toLowerCase() === "line" ? "lines+markers" : (type.toLowerCase() === "scatter" ? "markers" : undefined)
                                     }});
+                                    
+                                    if (showTrend && type.toLowerCase() === "scatter") {{
+                                        const trend = addTrendLine(xVals, yVals, String(g));
+                                        if (trend) traces.push(trend);
+                                    }}
                                 }});
                             }} else {{
                                 // Single series
+                                const xVals = data.map(r => r[x_col]);
+                                const yVals = data.map(r => r[y_col]);
+                                
                                 traces.push({{
-                                    x: data.map(r => r[x_col]),
-                                    y: data.map(r => r[y_col]),
+                                    x: xVals,
+                                    y: yVals,
                                     type: type.toLowerCase() === "line" ? "scatter" : (type.toLowerCase() === "scatter" ? "scatter" : "bar"),
                                     mode: type.toLowerCase() === "line" ? "lines+markers" : (type.toLowerCase() === "scatter" ? "markers" : undefined),
                                     marker: {{ color: "{trace_color}", size: 8 }}
                                 }});
+                                
+                                if (showTrend && type.toLowerCase() === "scatter") {{
+                                    const trend = addTrendLine(xVals, yVals, "All Data", "{trace_color}");
+                                    if (trend) traces.push(trend);
+                                }}
                             }}
 
                             const layout = {{
