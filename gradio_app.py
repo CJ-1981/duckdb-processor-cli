@@ -806,7 +806,7 @@ def upload_plugin(file_obj):
 def get_report_timestamp():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def add_report_section(sections, s_type, s_heading, s_body, sql_df, analysis_df):
+def add_report_section(sections, s_type, s_heading, s_body, sql_df, analysis_df, chart_type, x_axis, y_axis, color_by, facet_by, show_trend):
     """Add a new section to the report list capturing an immutable data snapshot."""
     global global_processor
     if not sections: sections = []
@@ -814,6 +814,7 @@ def add_report_section(sections, s_type, s_heading, s_body, sql_df, analysis_df)
     snapshot = None
     query = None
     action = None
+    chart_meta = None
     
     try:
         # Determine which data source to use based on section type
@@ -835,6 +836,30 @@ def add_report_section(sections, s_type, s_heading, s_body, sql_df, analysis_df)
                 logger.info(f"[REPORT_ADD] Captured Analyzer snapshot for '{s_heading}'. Shape: {snapshot.shape}")
             else:
                 logger.warning(f"[REPORT_ADD] No Analyzer data available for '{s_heading}'.")
+
+        elif s_type == "Visual Chart":
+            # For Visual Chart, we use the global_processor.last_result or fall back to the tabs
+            df_to_use = None
+            if global_processor and getattr(global_processor, 'last_result', None) is not None:
+                df_to_use = global_processor.last_result
+            elif sql_df is not None:
+                df_to_use = sql_df
+            elif analysis_df is not None:
+                df_to_use = analysis_df
+
+            if df_to_use is not None:
+                snapshot = df_to_use.copy(deep=True)
+                chart_meta = {
+                    "type": chart_type,
+                    "x": x_axis,
+                    "y": y_axis,
+                    "color": color_by,
+                    "facet": facet_by,
+                    "trend": show_trend
+                }
+                logger.info(f"[REPORT_ADD] Captured Chart snapshot for '{s_heading}'. Type: {chart_type}")
+            else:
+                logger.warning(f"[REPORT_ADD] No data available for chart '{s_heading}'.")
         
         else:
             # For Schema Info, Data Summary, etc., we don't need a dataframe snapshot in 'data'
@@ -846,7 +871,15 @@ def add_report_section(sections, s_type, s_heading, s_body, sql_df, analysis_df)
         logger.error(f"[REPORT_ADD] Failed to capture snapshot: {e}")
         snapshot = None
 
-    new_section = {"type": s_type, "heading": s_heading, "body": s_body, "data": snapshot, "query": query, "action": action}
+    new_section = {
+        "type": s_type, 
+        "heading": s_heading, 
+        "body": s_body, 
+        "data": snapshot, 
+        "query": query, 
+        "action": action,
+        "chart": chart_meta
+    }
     sections.append(new_section)
     return sections, f"✅ Added section: {s_heading}"
 def remove_report_section(sections, index):
@@ -952,6 +985,7 @@ def generate_interactive_html(title, author, sections):
         parts.append("<style>body{font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial;margin:20px;background:#0f172a;color:#e6eef8} h1,h2{color:#c7d2fe} .container{max-width:1200px;margin:auto} table.dataTable{width:100% !important;background:#071026;border-collapse:collapse} table.dataTable thead th{background:#07162a;color:#e6eef8} .dt-buttons{margin-bottom:8px}</style>")
         parts.append('<script src="https://code.jquery.com/jquery-3.5.1.js"></script>')
         parts.append('<script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>')
+        parts.append('<script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>')
         parts.append('</head><body><div class="container">')
         parts.append(f"<h1>{title or 'DuckDB Interactive Report'}</h1>")
         parts.append(f"<p><strong>Author:</strong> {author or 'Anonymous'} — <em>{get_report_timestamp()}</em></p><hr/>")
@@ -995,6 +1029,61 @@ def generate_interactive_html(title, author, sections):
                         parts.append(df.head(100).to_html(classes="display nowrap cell-border", index=False))
                 else:
                     parts.append('<p>No data available for this section.</p>')
+
+            # Handle Visual Charts
+            elif s.get('type') == "Visual Chart":
+                df = s.get('data')
+                cm = s.get('chart')
+                if df is not None and cm:
+                    chart_id = f"chart_{i}"
+                    c_type = cm.get('type', 'Bar')
+                    x = cm.get('x')
+                    y = cm.get('y')
+                    color = cm.get('color')
+                    
+                    # Convert dataframe to JSON for Plotly
+                    # Limit to 5000 rows for report performance
+                    chart_data = df.head(5000).to_dict(orient='records')
+                    import json
+                    json_data = json.dumps(chart_data)
+                    
+                    parts.append(f'<div id="{chart_id}" style="width:100%; height:500px; background:#071026; border-radius:8px; margin-top:10px;"></div>')
+                    parts.append(f'<script>
+                    (function() {{
+                        const data = {json_data};
+                        const x_col = "{x}";
+                        const y_col = "{y}";
+                        const color_col = "{color}";
+                        const type = "{c_type}";
+                        
+                        let trace = {{
+                            x: data.map(r => r[x_col]),
+                            y: data.map(r => r[y_col]),
+                            type: type.toLowerCase() === "line" ? "scatter" : type.toLowerCase(),
+                            mode: type.toLowerCase() === "line" ? "lines+markers" : "markers",
+                            marker: {{ color: "#6366f1" }}
+                        }};
+                        
+                        if (type === "Bar") {{
+                            trace.type = "bar";
+                            delete trace.mode;
+                        }}
+                        
+                        const layout = {{
+                            paper_bgcolor: "rgba(0,0,0,0)",
+                            plot_bgcolor: "rgba(0,0,0,0)",
+                            font: {{ color: "#e6eef8" }},
+                            margin: {{ t: 40, b: 60, l: 60, r: 40 }},
+                            xaxis: {{ title: x_col, gridcolor: "#1e293b" }},
+                            yaxis: {{ title: y_col, gridcolor: "#1e293b" }},
+                            title: {{ text: "{s.get('heading','')}", font: {{ size: 18, color: "#c7d2fe" }} }}
+                        }};
+                        
+                        Plotly.newPlot("{chart_id}", [trace], layout);
+                    }})();
+                    </script>')
+                else:
+                    parts.append('<p>No data or configuration available for this chart.</p>')
 
             parts.append('</section><hr/>')
 
@@ -1576,6 +1665,12 @@ def generate_report_markdown(title, author, sections):
                 md += f"```csv\n{df.to_csv(index=False)}\n```\n\n"
             else:
                 md += "_[Table data missing]_\n\n"
+        elif s.get('type') == "Visual Chart":
+            cm = s.get('chart')
+            if cm:
+                md += f"**Visual Chart:** {cm.get('type')} Plot ({cm.get('x')} vs {cm.get('y')})\n\n"
+            else:
+                md += "_[Chart configuration missing]_\n\n"
         else:
             logger.warning(f"[MD_GEN] Section {i+1} has unknown or unhandled type: {s.get('type')}")
             md += f"_[Unhandled section type: {s.get('type')}]_\n\n"
@@ -2018,7 +2113,7 @@ def create_ui():
                                 with gr.Row():
                                     report_section_heading = gr.Textbox(label="Section Heading", placeholder="e.g., Sales Summary")
                                     report_section_type = gr.Dropdown(
-                                        choices=["Analyzer Results Table", "SQL Results Table", "Schema Info", "Text/Note"],
+                                        choices=["Analyzer Results Table", "SQL Results Table", "Visual Chart", "Schema Info", "Text/Note"],
                                         value="Analyzer Results Table",
                                         label="Section Type"
                                     )
@@ -2385,7 +2480,20 @@ def create_ui():
         # Report Builder Handlers
         add_section_btn.click(
             fn=add_report_section,
-            inputs=[report_sections_state, report_section_type, report_section_heading, report_section_body, sql_state, analysis_state],
+            inputs=[
+                report_sections_state, 
+                report_section_type, 
+                report_section_heading, 
+                report_section_body, 
+                sql_state, 
+                analysis_state,
+                sql_chart_type,
+                sql_x_axis,
+                sql_y_axis,
+                sql_color_by,
+                sql_facet_by,
+                sql_show_trend
+            ],
             outputs=[report_sections_state, progress_box]
         ).then(
             fn=render_sections_view,
