@@ -466,7 +466,7 @@ def get_aggregated_df(df, chart_type, x_axis, y_axis, color_by=None, facet_by=No
         logger.error(f"Failed to aggregate data: {e}")
         return df.head(limit) if df is not None else None
 
-def get_chart_updates(df, chart_type, x_axis, y_axis, color_by=None, facet_by=None, show_trend=False):
+def get_chart_updates(df, chart_type, x_axis, y_axis, color_by=None, facet_by=None):
     """Generate updates for native Gradio plot components based on user selection."""
     hide = gr.update(visible=False, value=None)
     bar_upd, line_upd, scatter_upd = hide, hide, hide
@@ -502,7 +502,7 @@ def get_chart_updates(df, chart_type, x_axis, y_axis, color_by=None, facet_by=No
             scatter_upd = gr.update(value=plot_df, x=eff_x, y=eff_y, 
                                     color=color_by if color_by and color_by != 'None' and color_by in plot_df.columns else None, 
                                     visible=True, title=f"{y_axis or 'Value'} vs {x_axis}",
-                                    trend_line="ols" if show_trend else None)
+                                    trend_line=None)
             return hide, hide, scatter_upd
 
         return hide, hide, hide
@@ -879,7 +879,7 @@ def load_plugin_file(file_path):
 def get_report_timestamp():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def add_report_section(sections, s_type, s_heading, s_body, sql_df, analysis_df, chart_type, x_axis, y_axis, color_by, facet_by, show_trend):
+def add_report_section(sections, s_type, s_heading, s_body, sql_df, analysis_df, chart_type, x_axis, y_axis, color_by, facet_by):
     """Add a new section to the report list capturing an immutable data snapshot."""
     global global_processor
     if not sections: sections = []
@@ -928,8 +928,7 @@ def add_report_section(sections, s_type, s_heading, s_body, sql_df, analysis_df,
                     "x": 'x' if (snapshot is not None and 'x' in snapshot.columns) else x_axis,
                     "y": 'y' if (snapshot is not None and 'y' in snapshot.columns) else y_axis,
                     "color": color_by,
-                    "facet": facet_by,
-                    "trend": show_trend
+                    "facet": facet_by
                 }
                 logger.info(f"[REPORT_ADD] Captured Aggregated Chart snapshot for '{s_heading}'. Type: {chart_type}")
             else:
@@ -1190,49 +1189,11 @@ def generate_interactive_html(title, author, sections, theme="Dark (Default)"):
                             const color_col = "{color}";
                             const type = "{c_type}";
                             const chartId = "{chart_id}";
-                            const showTrend = {"true" if cm.get("trend") else "false"};
 
-                            console.log("Rendering chart " + chartId + " of type " + type + (showTrend ? " with trend" : ""));
+                            console.log("Rendering chart " + chartId + " of type " + type);
 
                             let traces = [];
                             
-                            // Helper for linear regression
-                            function addTrendLine(xData, yData, name, color) {{
-                                const n = xData.length;
-                                let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-                                let validPoints = 0;
-                                
-                                for (let i = 0; i < n; i++) {{
-                                    const x = parseFloat(x_col === "x" ? xData[i] : xData[i]); // Original x axis might be non-numeric
-                                    const y = parseFloat(yData[i]);
-                                    if (!isNaN(x) && !isNaN(y)) {{
-                                        sumX += x;
-                                        sumY += y;
-                                        sumXY += x * y;
-                                        sumXX += x * x;
-                                        validPoints++;
-                                    }}
-                                }}
-                                
-                                if (validPoints < 2) return null;
-                                
-                                const slope = (validPoints * sumXY - sumX * sumY) / (validPoints * sumXX - sumX * sumX);
-                                const intercept = (sumY - slope * sumX) / validPoints;
-                                
-                                const xMin = Math.min(...xData.filter(v => !isNaN(parseFloat(v))));
-                                const xMax = Math.max(...xData.filter(v => !isNaN(parseFloat(v))));
-                                
-                                return {{
-                                    x: [xMin, xMax],
-                                    y: [slope * xMin + intercept, slope * xMax + intercept],
-                                    type: 'scatter',
-                                    mode: 'lines',
-                                    name: name + ' (Trend)',
-                                    line: {{ dash: 'dot', width: 2, color: color || '#ff7f0e' }},
-                                    showlegend: true
-                                }};
-                            }}
-
                             if (color_col && color_col !== "None" && color_col !== "null" && data.length > 0 && data[0].hasOwnProperty(color_col)) {{
                                 // Grouped data (multiple series)
                                 const groups = [...new Set(data.map(r => r[color_col]))];
@@ -1248,11 +1209,6 @@ def generate_interactive_html(title, author, sections, theme="Dark (Default)"):
                                         type: type.toLowerCase() === "line" ? "scatter" : (type.toLowerCase() === "scatter" ? "scatter" : "bar"),
                                         mode: type.toLowerCase() === "line" ? "lines+markers" : (type.toLowerCase() === "scatter" ? "markers" : undefined)
                                     }});
-                                    
-                                    if (showTrend && type.toLowerCase() === "scatter") {{
-                                        const trend = addTrendLine(xVals, yVals, String(g));
-                                        if (trend) traces.push(trend);
-                                    }}
                                 }});
                             }} else {{
                                 // Single series
@@ -1266,11 +1222,6 @@ def generate_interactive_html(title, author, sections, theme="Dark (Default)"):
                                     mode: type.toLowerCase() === "line" ? "lines+markers" : (type.toLowerCase() === "scatter" ? "markers" : undefined),
                                     marker: {{ color: "{trace_color}", size: 8 }}
                                 }});
-                                
-                                if (showTrend && type.toLowerCase() === "scatter") {{
-                                    const trend = addTrendLine(xVals, yVals, "All Data", "{trace_color}");
-                                    if (trend) traces.push(trend);
-                                }}
                             }}
 
                             const layout = {{
@@ -2347,9 +2298,6 @@ def create_ui():
                                 sql_color_by = gr.Dropdown(choices=[], label="Color By")
                                 sql_facet_by = gr.Dropdown(choices=[], label="Facet By")
 
-                            with gr.Row():
-                                sql_show_trend = gr.Checkbox(label="Show Trend Line (Scatter Only)", value=False)
-
                         # Native Gradio Plots - Auto-theme sync
                         sql_bar_display = gr.BarPlot(label="Visualizer Bar Chart", visible=True)
                         sql_line_display = gr.LinePlot(label="Visualizer Line Chart", visible=False)
@@ -2672,11 +2620,11 @@ def create_ui():
         logger.info("[EVENT_SETUP] ✓ sql_export_xlsx_btn.click → handle_export_xlsx")
 
         # Manual chart controls - regenerate chart when parameters change
-        def handle_manual_chart_params(viz_source, chart_type, x_col, y_col, color_col, facet_col, show_trend, sql_df, analysis_df):
+        def handle_manual_chart_params(viz_source, chart_type, x_col, y_col, color_col, facet_col, sql_df, analysis_df):
             """Handle manual chart parameter changes based on selected source."""
             df = sql_df if viz_source == "SQL Query Editor" else analysis_df
             log_event("chart_params_change", chart_type, x_col, y_col)
-            return get_chart_updates(df, chart_type, x_col, y_col, color_col, facet_col, show_trend)
+            return get_chart_updates(df, chart_type, x_col, y_col, color_col, facet_col)
 
         def handle_viz_source_change(viz_source, sql_df, analysis_df):
             """Switch visualizer data source and update auto-charts."""
@@ -2698,7 +2646,7 @@ def create_ui():
             )
 
         # Wire up manual chart controls
-        chart_inputs = [viz_source, sql_chart_type, sql_x_axis, sql_y_axis, sql_color_by, sql_facet_by, sql_show_trend, sql_state, analysis_state]
+        chart_inputs = [viz_source, sql_chart_type, sql_x_axis, sql_y_axis, sql_color_by, sql_facet_by, sql_state, analysis_state]
         chart_outputs = [sql_bar_display, sql_line_display, sql_scatter_display]
 
         sql_chart_type.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
@@ -2706,7 +2654,6 @@ def create_ui():
         sql_y_axis.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
         sql_color_by.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
         sql_facet_by.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
-        sql_show_trend.change(fn=handle_manual_chart_params, inputs=chart_inputs, outputs=chart_outputs)
 
         viz_source.change(
             fn=handle_viz_source_change, 
@@ -2752,8 +2699,7 @@ def create_ui():
                 sql_x_axis,
                 sql_y_axis,
                 sql_color_by,
-                sql_facet_by,
-                sql_show_trend
+                sql_facet_by
             ],
             outputs=[report_sections_state, progress_box]
         ).then(
