@@ -206,8 +206,7 @@ class TestTabStructure:
         """Verify tab labels match BRIEF requirements."""
         expected_tabs = [
             "Data Inspection",
-            "Query Editor",
-            "Progress Monitoring"
+            "Query Editor"
         ]
 
         # Get all tab button text

@@ -43,7 +43,7 @@ def test_section_management():
 
 def test_template_application():
     # Test applying a valid template
-    sections, st, v, p = apply_report_template("Basic Summary")
+    sections, st, v_html, v_drop, p = apply_report_template("Basic Summary")
     assert len(sections) == 3
     assert sections[1]["type"] == "Schema Info"
     assert "✅ Applied template" in st

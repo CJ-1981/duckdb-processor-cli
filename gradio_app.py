@@ -1311,8 +1311,9 @@ def apply_report_template(template_name):
         # Deep copy to avoid mutating the original template
         import copy
         new_sections = copy.deepcopy(REPORT_TEMPLATES[template_name])
-        return new_sections, f"✅ Applied template: {template_name}", render_sections_view(new_sections), generate_report_markdown("Preview", "System", new_sections)
-    return gr.update(), "⚠️ Template not found.", gr.update(), gr.update()
+        preview_html, dropdown_upd = render_sections_view(new_sections)
+        return new_sections, f"✅ Applied template: {template_name}", preview_html, dropdown_upd, generate_report_markdown("Preview", "System", new_sections)
+    return gr.update(), "⚠️ Template not found.", gr.update(), gr.update(), gr.update()
 
 def get_plugin_list():
     """List all available plugins, distinguishing between built-in and custom."""
@@ -2409,37 +2410,19 @@ def create_ui():
                             gr.Markdown("*Click the download button above to save your generated report file.*", visible=False)
                             report_md_preview = gr.Markdown(visible=False)
 
-                    with gr.Tab("Progress Monitoring"):
-                        gr.Markdown("### Execution Status & Progress")
+                    # Hidden progress/status trackers (replacing the tab)
+                    progress_box = gr.Textbox(visible=False, interactive=False)
+                    exec_stats = gr.Textbox(visible=False, interactive=False)
+                    error_log = gr.Textbox(visible=False, interactive=False)
 
-                        # Progress indicators
-                        with gr.Row():
-                            with gr.Column():
-                                gr.Markdown("**Data Processing Status**")
-                                progress_box = gr.Textbox(
-                                    label="Current Progress",
-                                    lines=5,
-                                    interactive=False,
-                                    value="No data loaded. Load a CSV file to begin processing."
-                                )
-                            with gr.Column():
-                                gr.Markdown("**Execution Statistics**")
-                                exec_stats = gr.Textbox(
-                                    label="Statistics",
-                                    lines=5,
-                                    interactive=False,
-                                    value="Rows processed: 0\nQueries executed: 0\nErrors: 0"
-                                )
-
-                        # Error log
-                        gr.Markdown("---")
-                        gr.Markdown("### Error Log")
-                        error_log = gr.Textbox(
-                            label="Recent Errors",
-                            lines=10,
-                            interactive=False,
-                            value="No errors reported."
-                        )
+                    # Toast trigger for progress updates
+                    def show_toast_info(msg):
+                        if msg and isinstance(msg, str) and msg.strip():
+                            # Remove simple "Rows processed..." spam from toast if desired
+                            # or just show everything
+                            gr.Info(msg)
+                    
+                    progress_box.change(fn=show_toast_info, inputs=[progress_box])
 
 
         # ============================================================
