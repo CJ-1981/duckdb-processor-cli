@@ -965,7 +965,7 @@ def remove_report_section(sections, index):
 def clear_report_sections():
     return [], "✨ All sections cleared."
 
-def render_sections_view(sections):
+def render_sections_markdown_view(sections):
     """Return a Markdown representation of the current report structure."""
     if not sections:
         return "_No sections added yet._"
@@ -1771,12 +1771,15 @@ def restore_session(state):
 # (Lines 1432-1436 was a redundant duplicate, now removed)
 
 def render_sections_view(sections):
-    """Return HTML representation of sections for preview."""
+    """Return HTML representation of sections for preview and dropdown update."""
     if not sections:
-        return "<div class='report-section-list'>No sections added yet.</div>"
-    
+        return "<div class='report-section-list'>No sections added yet.</div>", gr.update(choices=[], value=None)
+
     html = "<div class='report-section-list' style='display: flex; flex-direction: column; gap: 10px;'>"
+    choices = []
     for i, s in enumerate(sections):
+        label = f"{i+1}. {s['heading']}"
+        choices.append(label)
         html += f'''
         <div style="padding: 10px; border: 1px solid #ddd; border-radius: 4px; background: rgba(0,0,0,0.05);">
             <div style="display: flex; justify-content: space-between;">
@@ -1786,11 +1789,50 @@ def render_sections_view(sections):
         </div>
         '''
     html += "</div>"
-    return html
+    return html, gr.update(choices=choices, value=choices[0] if choices else None)
 
 def clear_report_sections():
     """Reset report sections."""
     return [], "🗑️ Report cleared."
+
+def get_section_choices(sections):
+    return [f"{i+1}. {s['heading']}" for i, s in enumerate(sections)]
+
+def move_section_up(sections, selected_str):
+    if not sections or not selected_str:
+        return sections, "⚠️ No section selected."
+    try:
+        idx = int(selected_str.split(".")[0]) - 1
+        if idx > 0:
+            sections[idx - 1], sections[idx] = sections[idx], sections[idx - 1]
+            return sections, f"⬆️ Moved section '{sections[idx - 1]['heading']}' up."
+    except Exception as e:
+        logger.error(f"[MOVE_UP] Error: {e}")
+    return sections, "⚠️ Cannot move section up."
+
+def move_section_down(sections, selected_str):
+    if not sections or not selected_str:
+        return sections, "⚠️ No section selected."
+    try:
+        idx = int(selected_str.split(".")[0]) - 1
+        if idx < len(sections) - 1:
+            sections[idx + 1], sections[idx] = sections[idx], sections[idx + 1]
+            return sections, f"⬇️ Moved section '{sections[idx + 1]['heading']}' down."
+    except Exception as e:
+        logger.error(f"[MOVE_DOWN] Error: {e}")
+    return sections, "⚠️ Cannot move section down."
+
+def delete_section(sections, selected_str):
+    if not sections or not selected_str:
+        return sections, "⚠️ No section selected."
+    try:
+        idx = int(selected_str.split(".")[0]) - 1
+        if 0 <= idx < len(sections):
+            removed = sections.pop(idx)
+            return sections, f"🗑️ Deleted section: {removed['heading']}"
+    except Exception as e:
+        logger.error(f"[DELETE_SEC] Error: {e}")
+    return sections, "⚠️ Cannot delete section."
 
 def generate_report_markdown(title, author, sections):
     """Generate a Markdown file from report sections."""
@@ -2344,6 +2386,12 @@ def create_ui():
                                 report_preview_list = gr.HTML(
                                     value="<div class='report-section-list'>No sections added yet.</div>"
                                 )
+                                gr.Markdown("#### Manage Sections")
+                                manage_section_dropdown = gr.Dropdown(choices=[], label="Select Section to Manage", interactive=True)
+                                with gr.Row():
+                                    move_up_btn = gr.Button("⬆️ Move Up", size="sm")
+                                    move_down_btn = gr.Button("⬇️ Move Down", size="sm")
+                                    delete_section_btn = gr.Button("🗑️ Delete", size="sm", variant="stop")
                                 
                         gr.Markdown("---")
                         with gr.Row():
@@ -2705,7 +2753,7 @@ def create_ui():
         ).then(
             fn=render_sections_view,
             inputs=[report_sections_state],
-            outputs=[report_preview_list]
+            outputs=[report_preview_list, manage_section_dropdown]
         )
 
         clear_report_btn.click(
@@ -2714,7 +2762,38 @@ def create_ui():
         ).then(
             fn=render_sections_view,
             inputs=[report_sections_state],
-            outputs=[report_preview_list]
+            outputs=[report_preview_list, manage_section_dropdown]
+        )
+
+        # Move/Delete section handlers
+        move_up_btn.click(
+            fn=move_section_up,
+            inputs=[report_sections_state, manage_section_dropdown],
+            outputs=[report_sections_state, progress_box]
+        ).then(
+            fn=render_sections_view,
+            inputs=[report_sections_state],
+            outputs=[report_preview_list, manage_section_dropdown]
+        )
+
+        move_down_btn.click(
+            fn=move_section_down,
+            inputs=[report_sections_state, manage_section_dropdown],
+            outputs=[report_sections_state, progress_box]
+        ).then(
+            fn=render_sections_view,
+            inputs=[report_sections_state],
+            outputs=[report_preview_list, manage_section_dropdown]
+        )
+
+        delete_section_btn.click(
+            fn=delete_section,
+            inputs=[report_sections_state, manage_section_dropdown],
+            outputs=[report_sections_state, progress_box]
+        ).then(
+            fn=render_sections_view,
+            inputs=[report_sections_state],
+            outputs=[report_preview_list, manage_section_dropdown]
         )
 
         def handle_export(fmt, title, author, sections, current_files, theme="Dark (Default)"):
