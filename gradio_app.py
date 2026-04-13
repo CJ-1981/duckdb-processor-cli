@@ -2342,7 +2342,7 @@ def create_ui():
         save_plugin_btn.click(
             fn=save_plugin_file,
             inputs=[plugin_name_input, plugin_editor],
-            outputs=[plugin_status, gr.State(), gr.State()]
+            outputs=[plugin_status, analyzer_dropdown, gr.State()]
         )
 
         logger.info("[EVENT_SETUP] All event handlers wired successfully.")
