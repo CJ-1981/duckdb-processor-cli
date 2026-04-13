@@ -1193,43 +1193,43 @@ def generate_interactive_html(title, author, sections, theme="Dark (Default)"):
                             console.log("Rendering chart " + chartId + " of type " + type);
 
                             let traces = [];
-                            if (color_col && color_col !== "None" && color_col !== "null" && data.length > 0 && data[0].hasOwnProperty(color_col)) {
+                            if (color_col && color_col !== "None" && color_col !== "null" && data.length > 0 && data[0].hasOwnProperty(color_col)) {{
                                 // Grouped data (multiple series)
                                 const groups = [...new Set(data.map(r => r[color_col]))];
-                                groups.forEach(g => {
+                                groups.forEach(g => {{
                                     const groupData = data.filter(r => r[color_col] === g);
-                                    traces.push({
+                                    traces.push({{
                                         name: String(g),
                                         x: groupData.map(r => r[x_col]),
                                         y: groupData.map(r => r[y_col]),
                                         type: type.toLowerCase() === "line" ? "scatter" : (type.toLowerCase() === "scatter" ? "scatter" : "bar"),
                                         mode: type.toLowerCase() === "line" ? "lines+markers" : (type.toLowerCase() === "scatter" ? "markers" : undefined)
-                                    });
-                                });
-                            } else {
+                                    }});
+                                }});
+                            }} else {{
                                 // Single series
-                                traces.push({
+                                traces.push({{
                                     x: data.map(r => r[x_col]),
                                     y: data.map(r => r[y_col]),
                                     type: type.toLowerCase() === "line" ? "scatter" : (type.toLowerCase() === "scatter" ? "scatter" : "bar"),
                                     mode: type.toLowerCase() === "line" ? "lines+markers" : (type.toLowerCase() === "scatter" ? "markers" : undefined),
-                                    marker: { color: "{trace_color}", size: 8 }
-                                });
-                            }
+                                    marker: {{ color: "{trace_color}", size: 8 }}
+                                }});
+                            }}
 
-                            const layout = {
+                            const layout = {{
                                 paper_bgcolor: "rgba(0,0,0,0)",
                                 plot_bgcolor: "rgba(0,0,0,0)",
-                                font: { color: "{font_color}" },
-                                margin: { t: 40, b: 60, l: 60, r: 40 },
-                                xaxis: { title: x_col, gridcolor: "{grid_color}", zerolinecolor: "{grid_color}" },
-                                yaxis: { title: y_col, gridcolor: "{grid_color}", zerolinecolor: "{grid_color}" },
-                                title: { text: "{s.get('heading','')}", font: { size: 18 } },
+                                font: {{ color: "{font_color}" }},
+                                margin: {{ t: 40, b: 60, l: 60, r: 40 }},
+                                xaxis: {{ title: x_col, gridcolor: "{grid_color}", zerolinecolor: "{grid_color}" }},
+                                yaxis: {{ title: y_col, gridcolor: "{grid_color}", zerolinecolor: "{grid_color}" }},
+                                title: {{ text: "{s.get('heading','')}", font: {{ size: 18 }} }},
                                 autosize: true,
                                 barmode: 'group'
-                            };
+                            }};
 
-                            Plotly.newPlot(chartId, traces, layout, {responsive: true});
+                            Plotly.newPlot(chartId, traces, layout, {{responsive: true}});
                         }} catch (e) {{
                             console.error("Error rendering chart {chart_id}:", e);
                             document.getElementById("{chart_id}").innerHTML = "⚠️ Error rendering chart: " + e.message;
