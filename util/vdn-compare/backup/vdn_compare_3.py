@@ -1,0 +1,569 @@
+import os
+import sys
+import argparse
+import duckdb
+import pandas as pd
+import json
+from datetime import datetime
+import tkinter as tk
+from tkinter import filedialog
+
+# Windows UTF-8 re-configuration for correct box character rendering
+if os.name == 'nt':
+    import sys
+    import io
+    # Force the console to use UTF-8
+    os.system('chcp 65001 > nul 2>&1')
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich import box
+    has_rich = True
+except ImportError:
+    has_rich = False
+
+if has_rich:
+    _sys_console = Console()
+    def cprint(msg, *args, **kwargs):
+        _sys_console.print(msg, *args, **kwargs)
+else:
+    def cprint(msg, *args, **kwargs):
+        print(msg)
+
+try:
+    from tqdm import tqdm
+    has_tqdm = True
+    tqdm.pandas()
+except ImportError:
+    has_tqdm = False
+
+def load_file(file_path: str) -> pd.DataFrame:
+    """Load a CSV or Excel file into a pandas DataFrame."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == '.xlsx' or ext == '.xls':
+        return pd.read_excel(file_path)
+    elif ext == '.csv':
+        # Let pandas auto-detect the separator by using engine='python' and sep=None
+        return pd.read_csv(file_path, sep=None, engine='python')
+    else:
+        raise ValueError(f"Unsupported file format: {ext}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Compare Source and Target VDN reports.")
+    parser.add_argument('--source', help="Source file", default="input/DB.csv")
+    parser.add_argument('--target', help="Target PIE export file", default="input/PIE.csv")
+    parser.add_argument('--mismatch-only', nargs='?', const='default', help="Optional output file for Mismatches only")
+    parser.add_argument('--summary', nargs='?', const='default', help="Optional output file for the Summary and SW version matrix")
+    parser.add_argument('--format', choices=['csv', 'markdown', 'md', 'rich'], default='rich', help="Format for summary output")
+    parser.add_argument('--sort-vin', choices=['none', 'asc', 'desc'], default='none', help="Sort the output records by VIN (default: none, respects input order)")
+    parser.add_argument('--samples', default='10', help="Number of samples to show in summary (integer or 'all', default: 10)")
+    parser.add_argument('--pager', action='store_true', help="Use a pager to display long console tables")
+    parser.add_argument('--use-default-input', action='store_true', help="Load default DB.csv and PIE.csv from /input without dialog")
+    parser.add_argument('--compare', nargs='+', default=['sw', 'vdn', 'model'], help='List of columns to compare. Options: sw, vdn, model.')
+    parser.add_argument('--normalize-models', nargs='+', default=['EX30,V216,EX33'], help='Groups of equivalent models, comma-separated (e.g. "EX30,V216,EX33" "PS4,P417")')
+    args = parser.parse_args()
+
+    comp_flags = [c.lower() for c in args.compare]
+    compare_sw = 'sw' in comp_flags
+    compare_vdn = 'vdn' in comp_flags
+    compare_model = 'model' in comp_flags
+
+    # Determine if we should show the file dialog
+    # Default behavior: show dialog UNLESS --use-default-input is used 
+    # OR the user explicitly provided --source/--target via CLI
+    manual_input = args.source != "input/DB.csv" or args.target != "input/PIE.csv"
+    
+    if not args.use_default_input and not manual_input:
+        root = tk.Tk()
+        root.withdraw()  # Hide the main tkinter window
+        root.attributes('-topmost', True) # Bring dialog to front
+
+        cprint("[cyan]Please select the Source file...[/cyan]")
+        source_file = filedialog.askopenfilename(
+            title="Select Source file",
+            filetypes=[("CSV/Excel files", "*.csv *.xlsx *.xls"), ("All files", "*.*")]
+        )
+        if not source_file:
+            cprint("[bold red]No source file selected. Exiting.[/bold red]")
+            sys.exit(0)
+        args.source = source_file
+
+        cprint("[cyan]Please select Target file...[/cyan]")
+        target_file = filedialog.askopenfilename(
+            title="Select Target file",
+            filetypes=[("CSV/Excel files", "*.csv *.xlsx *.xls"), ("All files", "*.*")]
+        )
+        if not target_file:
+            cprint("[bold red]No target file selected. Exiting.[/bold red]")
+            sys.exit(0)
+        args.target = target_file
+        
+        root.destroy()
+
+    cprint(f"[cyan]Loading Source:[/cyan] [bold white]{args.source}[/bold white]")
+    df_source = load_file(args.source)
+    
+    cprint(f"[cyan]Loading Target:[/cyan] [bold white]{args.target}[/bold white]")
+    df_target = load_file(args.target)
+
+    # 1. Clean Column Headers & Map them
+    # We will normalize BOTH dataframes to use standard headers: VIN, CONSUMER_SW_VERSION, VDN_LIST
+    common_map = {
+        'vin': 'VIN',
+        'DB_SW': 'CONSUMER_SW_VERSION',
+        'DB_targetVdns': 'VDN_LIST',
+        'model': 'MODEL'
+    }
+    
+    df_source.rename(columns=common_map, inplace=True)
+    df_target.rename(columns=common_map, inplace=True)
+    
+    expected_cols = ['VIN']
+    if compare_sw: expected_cols.append('CONSUMER_SW_VERSION')
+    if compare_vdn: expected_cols.append('VDN_LIST')
+    if compare_model: expected_cols.append('MODEL')
+
+    # Verify standard columns exist
+    for col in expected_cols:
+        if col not in df_source.columns:
+            cprint(f"[bold yellow]Warning:[/bold yellow] Expected column '{col}' not found in Source file (resolved to {df_source.columns.tolist()})")
+        if col not in df_target.columns:
+            cprint(f"[bold yellow]Warning:[/bold yellow] Expected column '{col}' not found in Target file (resolved to {df_target.columns.tolist()})")
+
+    # 2. Trim whitespaces and quotes, and normalize null-like values
+    for df in (df_source, df_target):
+        for col in df.columns:
+            # Convert to string and clean
+            df[col] = df[col].astype(str).str.strip().str.replace(r'^"|"$', '', regex=True)
+            # Map null-like string representations back to None so DuckDB sees them as NULL
+            df[col] = df[col].replace({'nan': None, 'NaN': None, 'None': None, '': None})
+        
+        # Custom business logic normalization for Model comparison
+        if compare_model and 'MODEL' in df.columns:
+            df['MODEL_NORM'] = df['MODEL']
+            df['MODEL_DISPLAY'] = df['MODEL']
+            for group in args.normalize_models:
+                models = [m.strip() for m in group.split(',')]
+                if len(models) > 1:
+                    primary = models[0]
+                    for alias in models[1:]:
+                        # NORM receives the standard name for DuckDB matching
+                        df.loc[df['MODEL'] == alias, 'MODEL_NORM'] = primary
+                        # DISPLAY gets the explicit normalized indicator
+                        df.loc[df['MODEL'] == alias, 'MODEL_DISPLAY'] = f"{primary}({alias})"
+
+    # 3. Parse VDN_LIST smartly
+    def parse_vdn(val):
+        if pd.isna(val) or str(val).strip() in ('nan', ''): return ['NO DATA']
+        val_str = str(val).strip()
+        
+        # Check if it's a JSON array
+        if val_str.startswith('[') and val_str.endswith(']'):
+            try:
+                parsed = json.loads(val_str.replace("'", '"'))
+                if isinstance(parsed, list):
+                    result = sorted(str(v).strip() for v in parsed if str(v).strip())
+                    return result if result else ['NO DATA']
+            except Exception:
+                pass
+                
+        # If not, assume it's concatenated 4-char chunks
+        chunks = [val_str[i:i+4] for i in range(0, len(val_str), 4)]
+        result = sorted(c for c in chunks if c.strip())
+        return result if result else ['NO DATA']
+
+    for df in (df_source, df_target):
+        if compare_vdn and 'VDN_LIST' in df.columns:
+            if has_tqdm:
+                cprint(f"[cyan]Parsing VDNs for {df.columns[0]}...[/cyan]")
+                df['VDN_LIST_CLEAN'] = df['VDN_LIST'].progress_apply(lambda x: json.dumps(parse_vdn(x)))
+            else:
+                df['VDN_LIST_CLEAN'] = df['VDN_LIST'].apply(lambda x: json.dumps(parse_vdn(x)))
+            # Free up memory containing original heavy string values early
+            df.drop(columns=['VDN_LIST'], inplace=True)
+
+    # 4. Compare with DuckDB
+    con = duckdb.connect()
+    con.register('source_db', df_source)
+    con.register('target_db', df_target)
+
+    sort_clause = f"ORDER BY vin {args.sort_vin.upper()}" if args.sort_vin != 'none' else ""
+    
+    s_selects = ["VIN as vin"]
+    t_selects = ["VIN as vin"]
+    if compare_sw: 
+        s_selects.append("CONSUMER_SW_VERSION as source_sw")
+        t_selects.append("CONSUMER_SW_VERSION as target_sw")
+    if compare_model:
+        s_selects.append("MODEL_NORM as source_model")
+        s_selects.append("MODEL_DISPLAY as source_model_disp")
+        t_selects.append("MODEL_NORM as target_model")
+        t_selects.append("MODEL_DISPLAY as target_model_disp")
+    if compare_vdn:
+        s_selects.append("VDN_LIST_CLEAN as source_vdns_json")
+        t_selects.append("VDN_LIST_CLEAN as target_vdns_json")
+        
+    s_selects_str = ",\n            ".join(s_selects)
+    t_selects_str = ",\n            ".join(t_selects)
+    
+    joined_selects = ["COALESCE(s.vin, t.vin) as vin"]
+    if compare_sw:
+        joined_selects.append("CASE WHEN s.vin IS NULL THEN 'VIN not found in Source' ELSE COALESCE(s.source_sw, 'NO DATA') END as source_sw_display")
+        joined_selects.append("CASE WHEN t.vin IS NULL THEN 'VIN not found in Target' ELSE COALESCE(t.target_sw, 'NO DATA') END as target_sw_display")
+        joined_selects.append("CASE WHEN s.vin IS NULL OR t.vin IS NULL THEN 'MISMATCH' WHEN s.source_sw = t.target_sw THEN 'MATCH' ELSE 'MISMATCH' END as sw_match")
+    if compare_model:
+        joined_selects.append("CASE WHEN s.vin IS NULL THEN 'N/A' ELSE COALESCE(s.source_model_disp, 'NO DATA') END as source_model_display")
+        joined_selects.append("CASE WHEN t.vin IS NULL THEN 'N/A' ELSE COALESCE(t.target_model_disp, 'NO DATA') END as target_model_display")
+        joined_selects.append("CASE WHEN s.vin IS NULL OR t.vin IS NULL THEN 'MISMATCH' WHEN s.source_model = t.target_model THEN 'MATCH' ELSE 'MISMATCH' END as model_match")
+    if compare_vdn:
+        joined_selects.append("CASE WHEN s.vin IS NULL OR t.vin IS NULL THEN 'MISMATCH' WHEN s.source_vdns_json = t.target_vdns_json THEN 'MATCH' ELSE 'MISMATCH' END as vdn_match")
+        joined_selects.append("s.source_vdns_json as s_json")
+        joined_selects.append("t.target_vdns_json as t_json")
+        
+    joined_selects_str = ",\n            ".join(joined_selects)
+    
+    final_selects = ["vin"]
+    if compare_model:
+        final_selects.extend(["source_model_display as source_model", "target_model_display as target_model", "model_match"])
+    if compare_sw:
+        final_selects.extend(["source_sw_display as source_sw", "target_sw_display as target_sw", "sw_match"])
+    if compare_vdn:
+        final_selects.extend(["vdn_match", "s_json as s_vdns_json", "t_json as t_vdns_json"])
+        
+    mismatch_conditions = []
+    if compare_sw: mismatch_conditions.append("sw_match = 'MISMATCH'")
+    if compare_model: mismatch_conditions.append("model_match = 'MISMATCH'")
+    if compare_vdn: mismatch_conditions.append("vdn_match = 'MISMATCH'")
+    
+    if mismatch_conditions:
+        result_cond = " OR ".join(mismatch_conditions)
+        final_selects.append(f"CASE WHEN {result_cond} THEN 'NOK' ELSE 'OK' END as Result")
+    else:
+        final_selects.append("'OK' as Result")
+        
+    final_selects_str = ",\n        ".join(final_selects)
+
+    compare_query = f"""
+    WITH source_data AS (
+        SELECT {s_selects_str}
+        FROM source_db
+        WHERE VIN IS NOT NULL AND VIN != 'nan'
+    ),
+    target_data AS (
+        SELECT {t_selects_str}
+        FROM target_db
+        WHERE VIN IS NOT NULL AND VIN != 'nan'
+    ),
+    joined AS (
+        SELECT
+            {joined_selects_str}
+        FROM source_data s
+        FULL OUTER JOIN target_data t ON s.vin = t.vin
+    )
+    SELECT
+        {final_selects_str}
+    FROM joined
+    {sort_clause}
+    """
+    
+    result_df = con.execute(compare_query).df()
+    
+    import gc
+    # Free up heavy dataframe hashes immediately
+    del df_source
+    del df_target
+    con.close()
+    gc.collect()
+
+    # Advanced logic for Python-side extraction of VDN differences (Optimized)
+    if compare_vdn:
+        if has_tqdm:
+            cprint("[cyan]Extracting VDN differences...[/cyan]")
+            
+        def compute_diff(row):
+            if row['vdn_match'] != 'MISMATCH' or pd.isna(row['vdn_match']):
+                return "", ""
+                
+            s_vdns_str = row.get('s_vdns_json')
+            t_vdns_str = row.get('t_vdns_json')
+            
+            s_vdns = set(json.loads(s_vdns_str)) if pd.notna(s_vdns_str) else set()
+            t_vdns = set(json.loads(t_vdns_str)) if pd.notna(t_vdns_str) else set()
+            
+            only_in_t = t_vdns - s_vdns
+            only_in_s = s_vdns - t_vdns
+            
+            added = ", ".join(sorted(only_in_t)) if only_in_t else ""
+            removed = ", ".join(sorted(only_in_s)) if only_in_s else ""
+            
+            return added, removed
+
+        if has_tqdm:
+            tqdm.pandas(desc="Computing Diffs")
+            diffs = result_df.progress_apply(compute_diff, axis=1)
+        else:
+            diffs = result_df.apply(compute_diff, axis=1)
+
+        result_df['Only in Target (missing in Source)'] = diffs.map(lambda x: x[0])
+        result_df['Only in Source (missing in Target)'] = diffs.map(lambda x: x[1])
+        
+        final_output = result_df.drop(columns=['s_vdns_json', 't_vdns_json'], errors='ignore')
+    else:
+        final_output = result_df
+    
+    # Overall differences summary
+    mismatched_sw = final_output[final_output['sw_match'] == 'MISMATCH'] if compare_sw else pd.DataFrame()
+    mismatched_model = final_output[final_output['model_match'] == 'MISMATCH'] if compare_model else pd.DataFrame()
+    mismatched_vdns = final_output[final_output['vdn_match'] == 'MISMATCH'] if compare_vdn else pd.DataFrame()
+    
+    # Prepare output paths
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    os.makedirs('output', exist_ok=True)
+    full_report_path = f"output/vdn_comparison_results_{timestamp}.csv"
+    
+    # Calculate Summary Path early
+    summary_path = args.summary
+    if not summary_path or summary_path == 'default':
+        sum_ext = ".md" if args.format in ['markdown', 'md'] else (".txt" if args.format == 'rich' else ".csv")
+        summary_path = f"output/summary_{timestamp}{sum_ext}"
+    if (args.format == 'markdown' or args.format == 'md') and not (summary_path.endswith('.md') or summary_path.endswith('.markdown')):
+        summary_path = os.path.splitext(summary_path)[0] + ".md"
+
+    # Calculate Mismatch Path early
+    m_path = args.mismatch_only
+    if not m_path or m_path == 'default':
+        m_path = f"output/mismatch-only_{timestamp}.csv"
+    if not m_path.endswith('.csv'):
+         m_path = os.path.splitext(m_path)[0] + ".csv"
+
+    # Prepare summary content based on format
+    is_md = args.format in ['markdown', 'md']
+    
+    if is_md:
+        summary_lines = [
+            "# VDN Comparison Summary",
+            "",
+            "## Comparison Metadata",
+            f"- **Source File**: `{os.path.abspath(args.source)}`",
+            f"- **Target File**: `{os.path.abspath(args.target)}`",
+            f"- **Full Report**: [{os.path.basename(full_report_path)}](file:///{os.path.abspath(full_report_path).replace('\\', '/')})",
+            f"- **Summary**: [{os.path.basename(summary_path)}](file:///{os.path.abspath(summary_path).replace('\\', '/')})",
+            f"- **Mismatches Only**: [{os.path.basename(m_path)}](file:///{os.path.abspath(m_path).replace('\\', '/')})",
+            "",
+            "## Comparison Results",
+            f"- **Total VINs Analyzed**: {len(final_output)}",
+            f"- **VINs with Mismatched Model**: {len(mismatched_model)}" if compare_model else None,
+            f"- **VINs with Mismatched SW**: {len(mismatched_sw)}" if compare_sw else None,
+            f"- **VINs with Matched SW**: {len(final_output) - len(mismatched_sw)}" if compare_sw else None,
+            f"- **VINs with Mismatched VDNs**: {len(mismatched_vdns)}" if compare_vdn else None,
+            f"- **VINs with Matched VDNs**: {len(final_output) - len(mismatched_vdns)}" if compare_vdn else None,
+            ""
+        ]
+        summary_lines = [s for s in summary_lines if s is not None]
+    else:
+        summary_lines = [
+            "COMPARISON METADATA",
+            "-"*40,
+            f"Source File: {os.path.abspath(args.source)}",
+            f"Target File: {os.path.abspath(args.target)}",
+            f"Full Report: {os.path.abspath(full_report_path)}",
+            f"Summary File: {os.path.abspath(summary_path)}",
+            f"Mismatches: {os.path.abspath(m_path)}",
+            "\nCOMPARISON RESULTS",
+            "="*80,
+            f"Total VINs Analyzed: {len(final_output)}",
+            f"VINs with Mismatched Model: {len(mismatched_model)}" if compare_model else None,
+            f"VINs with Mismatched SW: {len(mismatched_sw)}" if compare_sw else None,
+            f"VINs with Matched SW: {len(final_output) - len(mismatched_sw)}" if compare_sw else None,
+            f"VINs with Mismatched VDNs: {len(mismatched_vdns)}" if compare_vdn else None,
+            f"VINs with Matched VDNs: {len(final_output) - len(mismatched_vdns)}" if compare_vdn else None,
+            ""
+        ]
+        summary_lines = [s for s in summary_lines if s is not None]
+    
+    # Print basic stats to console
+    for line in (summary_lines[7:] if not is_md else summary_lines[8:]): 
+        if line.strip(): cprint(f"[bold cyan]{line.replace('- **', '').replace('**', '')}[/bold cyan]")
+    
+    if not mismatched_sw.empty:
+        matrix_df = pd.crosstab(mismatched_sw['source_sw'], mismatched_sw['target_sw'])
+        header_text = "SW VERSION MISMATCH MATRIX (Source vs Target)"
+        
+        if is_md:
+            summary_lines.append(f"## {header_text}")
+            summary_lines.append("")
+            try:
+                # Apply red font to non-zero mismatch figures for Markdown
+                md_matrix = matrix_df.map(lambda x: f'<span style="color:red">{x}</span>' if str(x).isdigit() and int(x) > 0 else str(x))
+                summary_lines.append(md_matrix.reset_index().rename(columns={'source_sw': 'Source SW(row) \\ Target SW(col)'}).to_markdown(index=False))
+            except ImportError:
+                summary_lines.append(matrix_df.to_string())
+            summary_lines.append("")
+        elif args.format == 'rich' and has_rich:
+            from io import StringIO
+            summary_lines.append(f"\n{header_text}:")
+            # Capture Rich table output to string (high width to prevent truncation)
+            capture_console = Console(file=StringIO(), force_terminal=False, width=250)
+            matrix_df_reset = matrix_df.reset_index().rename(columns={'source_sw': 'Source\\Target'})
+            table = Table(show_header=True, header_style="bold magenta", show_lines=True, box=box.SQUARE)
+            for col in matrix_df_reset.columns: table.add_column(str(col), overflow="fold")
+            for _, row in matrix_df_reset.iterrows(): table.add_row(*[f"[bold red]{val}[/bold red]" if str(val).isdigit() and int(val) > 0 else str(val) for val in row.values])
+            capture_console.print(table)
+            summary_lines.append(capture_console.file.getvalue())
+        elif args.format == 'csv' or args.format == 'rich': # Fallback to CSV for rich if needed
+            summary_lines.append(f"\n{header_text}:")
+            summary_lines.append(matrix_df.to_csv())
+        else:
+            summary_lines.append(f"\n{header_text}:")
+            summary_lines.append(matrix_df.to_string())
+
+        # Matrix for Console
+        cprint(f"\n[bold magenta]{header_text}:[/bold magenta]")
+        if has_rich:
+            # Use a console with explicit settings for pager compatibility
+            console = Console(force_terminal=True, soft_wrap=False)
+            matrix_df_reset = matrix_df.reset_index().rename(columns={'source_sw': 'Source\\Target'})
+            # Use ASCII box on Windows for pager compatibility, SQUARE otherwise
+            table_box = box.ASCII if os.name == 'nt' and args.pager else box.SQUARE
+            table = Table(show_header=True, header_style="bold magenta", show_lines=True, box=table_box)
+            for col in matrix_df_reset.columns: table.add_column(str(col), overflow="fold")
+            for _, row in matrix_df_reset.iterrows(): table.add_row(*[f"[bold red]{val}[/bold red]" if str(val).isdigit() and int(val) > 0 else str(val) for val in row.values])
+            
+            if args.pager:
+                with console.pager(styles=True):
+                    console.print(table)
+            else:
+                console.print(table)
+        else:
+            cprint(matrix_df.to_string())
+
+    if not mismatched_vdns.empty:
+        # Determine sample size
+        if args.samples.lower() == 'all':
+            sample_df = mismatched_vdns
+            display_count = "ALL"
+        else:
+            try:
+                n = int(args.samples)
+                sample_df = mismatched_vdns.head(n)
+                display_count = str(len(sample_df))
+            except ValueError:
+                sample_df = mismatched_vdns.head(10)
+                display_count = "10"
+
+        # Select columns for display dynamically based on what was compared
+        cols = ['vin']
+        if compare_model: cols.extend(['source_model', 'target_model', 'model_match'])
+        if compare_sw: cols.extend(['source_sw', 'target_sw', 'sw_match'])
+        cols.append('Result')
+        if compare_vdn: cols.extend(['vdn_match', 'Only in Target (missing in Source)', 'Only in Source (missing in Target)'])
+        sample = sample_df[cols]
+        actual_n = len(sample)
+        
+        sample_header = f"SAMPLE VDN MISMATCHES ({actual_n} entries)"
+        
+        # Add Header to Summary
+        if is_md:
+            summary_lines.append(f"## {sample_header}")
+            summary_lines.append("")
+        else:
+            summary_lines.append(f"\n{sample_header}:")
+            
+        # Print Header to Console
+        cprint(f"\n[bold cyan]{sample_header}:[/bold cyan]")
+        
+        # Sample for Summary File
+        if is_md:
+            try:
+                # Highlight mismatch indicators in red for Markdown
+                red_indicators = ['MISMATCH', 'NOK']
+                md_sample = sample.map(lambda x: f'<span style="color:red">{x}</span>' if str(x).upper() in red_indicators else str(x))
+                summary_lines.append(md_sample.to_markdown(index=False))
+            except ImportError:
+                summary_lines.append(sample.to_string(index=False))
+            summary_lines.append("")
+        elif args.format == 'rich' and has_rich:
+            from io import StringIO
+            # Capture Rich table output for sample (high width to prevent truncation)
+            capture_console = Console(file=StringIO(), force_terminal=False, width=250)
+            table = Table(show_header=True, header_style="bold cyan", show_lines=True, box=box.SQUARE)
+            for col in sample.columns: table.add_column(str(col), overflow="fold")
+            for _, row in sample.iterrows():
+                table.add_row(*[f"[bold red]{val}[/bold red]" if str(val).upper() in ['MISMATCH', 'NOK'] else str(val) for val in row.values])
+            capture_console.print(table)
+            summary_lines.append(capture_console.file.getvalue())
+        elif args.format == 'csv' or args.format == 'rich':
+            summary_lines.append(sample.to_csv(index=False))
+        else:
+            summary_lines.append(sample.to_string(index=False))
+
+        # Sample for Console
+        if has_rich:
+            console = Console(force_terminal=True, soft_wrap=False)
+            table_box = box.ASCII if os.name == 'nt' and args.pager else box.SQUARE
+            table = Table(show_header=True, header_style="bold cyan", show_lines=True, box=table_box)
+            for col in sample.columns: table.add_column(str(col), overflow="fold")
+            for _, row in sample.iterrows():
+                table.add_row(*[f"[bold red]{val}[/bold red]" if str(val).upper() in ['MISMATCH', 'NOK'] else str(val) for val in row.values])
+            
+            if args.pager:
+                with console.pager(styles=True):
+                    console.print(table)
+            else:
+                console.print(table)
+        else:
+            cprint(sample.to_string(index=False))
+    else:
+        msg = "No VDN Mismatches Found!"
+        summary_lines.append(msg)
+        cprint(f"[bold green]{msg}[/bold green]")
+        
+    # Always save full report as CSV (Scalability/Performance)
+    def save_dataframe(df, file_path, fmt):
+        os.makedirs(os.path.dirname(file_path) or '.', exist_ok=True)
+        try:
+            if fmt == 'csv':
+                df.to_csv(file_path, index=False)
+            else:
+                try:
+                    # Limit markdown to avoid massive files crashing editors
+                    if len(df) > 5000:
+                        cprint(f"[bold yellow]Warning:[/bold yellow] [bold white]{file_path}[/bold white] is very large ({len(df)} rows). Markdown might be slow to open.")
+                    df.to_markdown(file_path, index=False)
+                except ImportError:
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write('| ' + ' | '.join(df.columns) + ' |\n')
+                        f.write('| ' + ' | '.join(['---'] * len(df.columns)) + ' |\n')
+                        for _, row in df.iterrows():
+                            f.write('| ' + ' | '.join(str(v).replace('\n', '<br>') for v in row.values) + ' |\n')
+            cprint(f"[green]Saved report to[/green] [bold white]{file_path}[/bold white]")
+        except PermissionError:
+            cprint(f"\n[bold red][ERROR][/bold red] Permission denied: '{file_path}'. ")
+            cprint("[yellow]Please ensure the file is NOT open in Excel or another program, then try again.[/yellow]")
+
+    # Enforce CSV for the 220k+ row full output
+    save_dataframe(final_output, full_report_path, 'csv')
+    
+    summary_text = "\n".join(summary_lines)
+    
+    # Save Summary
+    out_dir = os.path.dirname(summary_path)
+    if out_dir: os.makedirs(out_dir, exist_ok=True)
+    try:
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            f.write(summary_text)
+        cprint(f"[green]Saved Summary to[/green] [bold white]{summary_path}[/bold white]")
+    except PermissionError:
+        cprint(f"\n[bold red][ERROR][/bold red] Permission denied: '{summary_path}'.")
+        
+    # Handle Mismatches logic (CSV only)
+    mismatches_only = final_output[final_output['Result'] == 'NOK']
+    save_dataframe(mismatches_only, m_path, 'csv')
+
+if __name__ == '__main__':
+    main()
