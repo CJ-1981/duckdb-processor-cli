@@ -1048,7 +1048,7 @@ def generate_interactive_html(title, author, sections):
                     json_data = json.dumps(chart_data)
                     
                     parts.append(f'<div id="{chart_id}" style="width:100%; height:500px; background:#071026; border-radius:8px; margin-top:10px;"></div>')
-                    parts.append(f'<script>
+                    parts.append(f"""<script>
                     (function() {{
                         const data = {json_data};
                         const x_col = "{x}";
@@ -1081,7 +1081,7 @@ def generate_interactive_html(title, author, sections):
                         
                         Plotly.newPlot("{chart_id}", [trace], layout);
                     }})();
-                    </script>')
+                    </script>""")
                 else:
                     parts.append('<p>No data or configuration available for this chart.</p>')
 
