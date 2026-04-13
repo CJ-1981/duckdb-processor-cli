@@ -1974,10 +1974,11 @@ def create_ui():
                                     new_plugin_btn = gr.Button("📄 New Template")
                                     save_plugin_btn = gr.Button("💾 Save Plugin", variant="primary")
 
-                                with gr.Column(scale=1):
+                            with gr.Column(scale=1):
                                 gr.Markdown("#### Plugin Management")
                                 plugin_name_input = gr.Textbox(label="Plugin Name (e.g. my_analysis)", placeholder="my_analysis")
-                                plugin_status = gr.Textbox(label="Status", interactive=False)                                plugin_logs = gr.Code(label="Console Output", language="python", lines=15)
+                                plugin_status = gr.Textbox(label="Status", interactive=False)
+                                plugin_logs = gr.Code(label="Console Output", language="python", lines=15)
                                 
                         gr.Markdown("#### Test Results")
                         plugin_results_table = gr.Dataframe(label="Plugin Results Table", visible=False)
