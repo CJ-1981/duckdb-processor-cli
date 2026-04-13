@@ -1147,39 +1147,49 @@ def generate_interactive_html(title, author, sections, theme="Dark (Default)"):
                     grid_color = "#1e293b" if "Dark" in theme else "#e2e8f0"
                     trace_color = "#6366f1" if "Dark" in theme else "#2563eb"
 
-                    parts.append(f'<div id="{{chart_id}}" style="width:100%; height:500px; border-radius:8px; margin-top:10px;"></div>')
+                    parts.append(f'<div id="{chart_id}" style="width:100%; height:500px; border-radius:8px; margin-top:10px; background:{bg_color};"></div>')
+                    
+                    # More robust JS generation
                     parts.append(f"""<script>
                     (function() {{
-                        const data = {json_data};
-                        const x_col = "{x}";
-                        const y_col = "{y}";
-                        const color_col = "{color}";
-                        const type = "{c_type}";
+                        try {{
+                            const data = {json_data};
+                            const x_col = "{x}";
+                            const y_col = "{y}";
+                            const color_col = "{color}";
+                            const type = "{c_type}";
+                            const chartId = "{chart_id}";
 
-                        let trace = {{
-                            x: data.map(r => r[x_col]),
-                            y: data.map(r => r[y_col]),
-                            type: type.toLowerCase() === "line" ? "scatter" : type.toLowerCase(),
-                            mode: type.toLowerCase() === "line" ? "lines+markers" : "markers",
-                            marker: {{ color: "{trace_color}" }}
-                        }};
+                            console.log("Rendering chart " + chartId + " of type " + type);
 
-                        if (type === "Bar") {{
-                            trace.type = "bar";
-                            delete trace.mode;
+                            let trace = {{
+                                x: data.map(r => r[x_col]),
+                                y: data.map(r => r[y_col]),
+                                type: type.toLowerCase() === "line" ? "scatter" : (type.toLowerCase() === "scatter" ? "scatter" : "bar"),
+                                mode: type.toLowerCase() === "line" ? "lines+markers" : (type.toLowerCase() === "scatter" ? "markers" : undefined),
+                                marker: {{ color: "{trace_color}", size: 8 }}
+                            }};
+
+                            if (color_col && color_col !== "None" && color_col !== "null") {{
+                                trace.marker.color = data.map(r => r[color_col]);
+                            }}
+
+                            const layout = {{
+                                paper_bgcolor: "rgba(0,0,0,0)",
+                                plot_bgcolor: "rgba(0,0,0,0)",
+                                font: {{ color: "{font_color}" }},
+                                margin: {{ t: 40, b: 60, l: 60, r: 40 }},
+                                xaxis: {{ title: x_col, gridcolor: "{grid_color}", zerolinecolor: "{grid_color}" }},
+                                yaxis: {{ title: y_col, gridcolor: "{grid_color}", zerolinecolor: "{grid_color}" }},
+                                title: {{ text: "{s.get('heading','')}", font: {{ size: 18 }} }},
+                                autosize: true
+                            }};
+
+                            Plotly.newPlot(chartId, [trace], layout, {{responsive: true}});
+                        }} catch (e) {{
+                            console.error("Error rendering chart {chart_id}:", e);
+                            document.getElementById("{chart_id}").innerHTML = "⚠️ Error rendering chart: " + e.message;
                         }}
-
-                        const layout = {{
-                            paper_bgcolor: "{bg_color}",
-                            plot_bgcolor: "{bg_color}",
-                            font: {{ color: "{font_color}" }},
-                            margin: {{ t: 40, b: 60, l: 60, r: 40 }},
-                            xaxis: {{ title: x_col, gridcolor: "{grid_color}" }},
-                            yaxis: {{ title: y_col, gridcolor: "{grid_color}" }},
-                            title: {{ text: "{s.get('heading','')}", font: {{ size: 18 }} }}
-                        }};
-
-                        Plotly.newPlot("{chart_id}", [trace], layout);
                     }})();
                     </script>""")
                 else:
