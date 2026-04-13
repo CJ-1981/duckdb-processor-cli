@@ -1983,7 +1983,13 @@ def create_ui():
                                 plugin_logs = gr.Code(label="Console Output", language="python", lines=15)
                                 
                         gr.Markdown("#### Test Results")
-                        plugin_results_table = gr.Dataframe(label="Plugin Results Table", visible=False)
+                        plugin_results_table = gr.Dataframe(
+                            label="Plugin Results Table",
+                            visible=False,
+                            row_count=(25, "dynamic"),
+                            max_height=800,
+                            elem_id="plugin-results-table"
+                        )
 
                     with gr.Tab("Progress Monitoring"):
                         gr.Markdown("### Execution Status & Progress")
