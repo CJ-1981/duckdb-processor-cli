@@ -1008,12 +1008,50 @@ def _OBSOLETE_generate_report_markdown(title, author, sections, include_summary=
     
     return md
 
-def generate_interactive_html(title, author, sections):
+def generate_interactive_html(title, author, sections, theme="Dark (Default)"):
     """Generate an interactive HTML report using markdown + itables for tables."""
     global TEMP_DIR
-    logger.info(f"[HTML_GEN] Starting generation for {len(sections)} sections")
+    logger.info(f"[HTML_GEN] Starting generation for {len(sections)} sections with theme: {theme}")
     if not sections:
         raise gr.Error("No sections provided for report generation.")
+
+    # Define Theme CSS
+    themes = {
+        "Dark (Default)": {
+            "body": "background:#0f172a; color:#e6eef8;",
+            "h1": "color:#c7d2fe;",
+            "section": "border-bottom: 1px solid #1e293b;",
+            "table_bg": "#071026",
+            "table_head": "background:#07162a; color:#e6eef8;",
+            "code_bg": "#1e293b"
+        },
+        "Light & Clean": {
+            "body": "background:#ffffff; color:#334155;",
+            "h1": "color:#0f172a;",
+            "section": "border-bottom: 1px solid #e2e8f0;",
+            "table_bg": "#ffffff",
+            "table_head": "background:#f8fafc; color:#0f172a;",
+            "code_bg": "#f1f5f9"
+        },
+        "Modern Blue": {
+            "body": "background:#f0f9ff; color:#0c4a6e;",
+            "h1": "color:#0369a1;",
+            "section": "border-bottom: 1px solid #bae6fd;",
+            "table_bg": "#ffffff",
+            "table_head": "background:#0ea5e9; color:#ffffff;",
+            "code_bg": "#e0f2fe"
+        },
+        "Classic Business": {
+            "body": "background:#f4f4f5; color:#18181b; font-family: 'Times New Roman', serif;",
+            "h1": "color:#000000; border-bottom: 2px solid #000;",
+            "section": "margin-bottom: 30px;",
+            "table_bg": "#ffffff",
+            "table_head": "background:#27272a; color:#ffffff;",
+            "code_bg": "#e4e4e7"
+        }
+    }
+
+    t = themes.get(theme, themes["Dark (Default)"])
 
     try:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1025,40 +1063,53 @@ def generate_interactive_html(title, author, sections):
         parts.append(f"<title>{title or 'DuckDB Interactive Report'}</title>")
         # DataTables: Using CDN. For offline mode, download these files and replace URLs with local paths.
         parts.append('<link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/jquery.dataTables.min.css"/>')
-        parts.append("<style>body{font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial;margin:20px;background:#0f172a;color:#e6eef8} h1,h2{color:#c7d2fe} .container{max-width:1200px;margin:auto} table.dataTable{width:100% !important;background:#071026;border-collapse:collapse} table.dataTable thead th{background:#07162a;color:#e6eef8} .dt-buttons{margin-bottom:8px}</style>")
+
+        css = f"""<style>
+            body {{ font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial; margin:40px; {t['body']} }}
+            h1, h2 {{ {t['h1']} }}
+            .container {{ max-width:1200px; margin:auto; }}
+            section {{ padding: 20px 0; {t['section']} }}
+            table.dataTable {{ width:100% !important; background:{t['table_bg']} !important; border-collapse:collapse; }}
+            table.dataTable thead th {{ {t['table_head']} }}
+            pre {{ background:{t['code_bg']}; padding:15px; border-radius:8px; overflow-x:auto; }}
+            hr {{ opacity: 0.2; }}
+            .dt-buttons {{ margin-bottom:8px; }}
+        </style>"""
+        parts.append(css)
+
         parts.append('<script src="https://code.jquery.com/jquery-3.5.1.js"></script>')
         parts.append('<script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>')
         parts.append('<script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>')
         parts.append('</head><body><div class="container">')
         parts.append(f"<h1>{title or 'DuckDB Interactive Report'}</h1>")
-        parts.append(f"<p><strong>Author:</strong> {author or 'Anonymous'} — <em>{get_report_timestamp()}</em></p><hr/>")
+        parts.append(f"<p><strong>Author:</strong> {author or 'Anonymous'} — <em>{get_report_timestamp()}</em></p>")
 
         for i, s in enumerate(sections):
             logger.info(f"[HTML_GEN] Processing section {i+1}: {s.get('heading')}")
             parts.append(f"<section><h2>{s.get('heading','')}</h2>")
-            
+
             # Handle Text/Note
             if s.get('type') == "Text/Note":
                 body = s.get('body') or ""
                 parts.append(markdown.markdown(body))
-            
+
             # Handle Schema Info
             elif s.get('type') == "Schema Info":
                 parts.append(f"<pre><code>{get_schema_info()}</code></pre>")
-            
+
             # Handle Data Summary
             elif s.get('type') == "Data Summary":
                 info = global_processor.info() if global_processor else {}
                 parts.append(f"<p>Total Rows: {info.get('rows', '?')}<br>Total Columns: {len(info.get('columns', []))}</p>")
-            
+
             # Handle Tables
             elif s.get('type') in ["Analyzer Results Table", "SQL Results Table"]:
                 df = s.get('data')
                 query = s.get('query')
                 action = s.get('action')
-                
+
                 if s.get('type') == "SQL Results Table" and query:
-                    parts.append(f"<div style='margin-bottom:10px; opacity:0.8;'><small><strong>Source SQL:</strong></small><pre style='background:#1e293b; padding:10px; border-radius:4px; font-size:12px;'><code>{query}</code></pre></div>")
+                    parts.append(f"<div style='margin-bottom:10px; opacity:0.8;'><small><strong>Source SQL:</strong></small><pre style='font-size:12px;'><code>{query}</code></pre></div>")
                 elif s.get('type') == "Analyzer Results Table" and action:
                     parts.append(f"<div style='margin-bottom:10px; opacity:0.8;'><small><strong>Analyzer:</strong> {action}</small></div>")
 
@@ -1083,14 +1134,20 @@ def generate_interactive_html(title, author, sections):
                     x = cm.get('x')
                     y = cm.get('y')
                     color = cm.get('color')
-                    
+
                     # Convert dataframe to JSON for Plotly
                     # Limit to 5000 rows for report performance
                     chart_data = df.head(5000).to_dict(orient='records')
                     import json
                     json_data = json.dumps(chart_data)
-                    
-                    parts.append(f'<div id="{chart_id}" style="width:100%; height:500px; background:#071026; border-radius:8px; margin-top:10px;"></div>')
+
+                    # Determine chart colors based on theme
+                    bg_color = "rgba(0,0,0,0)"
+                    font_color = "#e6eef8" if "Dark" in theme else "#334155"
+                    grid_color = "#1e293b" if "Dark" in theme else "#e2e8f0"
+                    trace_color = "#6366f1" if "Dark" in theme else "#2563eb"
+
+                    parts.append(f'<div id="{{chart_id}}" style="width:100%; height:500px; border-radius:8px; margin-top:10px;"></div>')
                     parts.append(f"""<script>
                     (function() {{
                         const data = {json_data};
@@ -1098,37 +1155,37 @@ def generate_interactive_html(title, author, sections):
                         const y_col = "{y}";
                         const color_col = "{color}";
                         const type = "{c_type}";
-                        
+
                         let trace = {{
                             x: data.map(r => r[x_col]),
                             y: data.map(r => r[y_col]),
                             type: type.toLowerCase() === "line" ? "scatter" : type.toLowerCase(),
                             mode: type.toLowerCase() === "line" ? "lines+markers" : "markers",
-                            marker: {{ color: "#6366f1" }}
+                            marker: {{ color: "{trace_color}" }}
                         }};
-                        
+
                         if (type === "Bar") {{
                             trace.type = "bar";
                             delete trace.mode;
                         }}
-                        
+
                         const layout = {{
-                            paper_bgcolor: "rgba(0,0,0,0)",
-                            plot_bgcolor: "rgba(0,0,0,0)",
-                            font: {{ color: "#e6eef8" }},
+                            paper_bgcolor: "{bg_color}",
+                            plot_bgcolor: "{bg_color}",
+                            font: {{ color: "{font_color}" }},
                             margin: {{ t: 40, b: 60, l: 60, r: 40 }},
-                            xaxis: {{ title: x_col, gridcolor: "#1e293b" }},
-                            yaxis: {{ title: y_col, gridcolor: "#1e293b" }},
-                            title: {{ text: "{s.get('heading','')}", font: {{ size: 18, color: "#c7d2fe" }} }}
+                            xaxis: {{ title: x_col, gridcolor: "{grid_color}" }},
+                            yaxis: {{ title: y_col, gridcolor: "{grid_color}" }},
+                            title: {{ text: "{s.get('heading','')}", font: {{ size: 18 }} }}
                         }};
-                        
+
                         Plotly.newPlot("{chart_id}", [trace], layout);
                     }})();
                     </script>""")
                 else:
                     parts.append('<p>No data or configuration available for this chart.</p>')
 
-            parts.append('</section><hr/>')
+            parts.append('</section>')
 
         parts.append('</div>')
         parts.append('''
@@ -1159,9 +1216,9 @@ $(document).ready(function(){
 import gc
 # ... existing imports
 
-def export_report_file(fmt, title, author, sections):
+def export_report_file(fmt, title, author, sections, theme="Dark (Default)"):
     """Dispatcher for exporting the report."""
-    logger.info(f"[REPORT] Export starting for format={fmt}")
+    logger.info(f"[REPORT] Export starting for format={fmt}, theme={theme}")
     logger.info(f"[REPORT] Received {len(sections)} sections.")
     
     if not sections:
@@ -1173,8 +1230,8 @@ def export_report_file(fmt, title, author, sections):
             path = generate_report_markdown(title, author, sections)
             logger.info(f"[REPORT] Markdown file generated at: {path}")
         elif fmt == "html":
-            logger.info("[REPORT] Calling generate_interactive_html")
-            path = generate_interactive_html(title, author, sections)
+            logger.info(f"[REPORT] Calling generate_interactive_html with theme={theme}")
+            path = generate_interactive_html(title, author, sections, theme=theme)
             logger.info(f"[REPORT] HTML file generated at: {path}")
             path = os.path.abspath(path)
         
@@ -2190,7 +2247,14 @@ def create_ui():
                         gr.Markdown("### Multi-Section Analysis Report")
                         with gr.Row():
                             with gr.Column(scale=2):
-                                report_title = gr.Textbox(label="Report Title", value="DuckDB Analysis Report")
+                                with gr.Row():
+                                    report_title = gr.Textbox(label="Report Title", value="DuckDB Analysis Report", scale=2)
+                                    report_theme = gr.Dropdown(
+                                        choices=["Dark (Default)", "Light & Clean", "Modern Blue", "Classic Business"],
+                                        value="Dark (Default)",
+                                        label="Report Theme",
+                                        scale=1
+                                    )
                                 report_author = gr.Textbox(label="Author Name", value="Analyst")
                                 
                                 with gr.Row():
@@ -2561,19 +2625,19 @@ def create_ui():
             outputs=[report_preview_list]
         )
 
-        def handle_export(fmt, title, author, sections, current_files):
+        def handle_export(fmt, title, author, sections, current_files, theme="Dark (Default)"):
             if not sections:
                 gr.Warning("Report is empty. Please add sections first.")
                 return gr.update(visible=False)
-            path = export_report_file(fmt, title, author, sections)
+            path = export_report_file(fmt, title, author, sections, theme=theme)
             if not path:
                 gr.Error("Failed to generate report.")
                 return gr.update(visible=False)
-            
+
             # If current_files exists, append the new path
             new_files = current_files if isinstance(current_files, list) else ([current_files] if current_files else [])
             new_files.append(path)
-            
+
             # Returning an explicit gr.update is safer for component state synchronization
             return gr.update(visible=True, value=new_files)
 
@@ -2586,11 +2650,10 @@ def create_ui():
 
         gen_html_btn.click(
             fn=handle_export,
-            inputs=[gr.State('html'), report_title, report_author, report_sections_state, report_output_file],
+            inputs=[gr.State('html'), report_title, report_author, report_sections_state, report_output_file, report_theme],
             outputs=[report_output_file],
             show_progress="hidden"
         )
-
         # Plugin Studio Handlers
         test_plugin_btn.click(
             fn=test_analyzer_plugin,
