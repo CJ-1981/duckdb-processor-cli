@@ -630,7 +630,11 @@ def run_analysis(analyzer_name, max_rows, max_cols, progress=gr.Progress()):
         
         progress(0.4, desc="Executing analysis logic...")
         analyzer.run(global_processor)
-        
+
+        # Explicitly update metadata to distinguish from plain SQL
+        global_processor.last_action = f"Analyzer: {analyzer_name}"
+        global_processor.last_query = None # Analyzers might run multiple queries, so clear the specific SQL string
+
         df = global_processor.last_result
         if df is None or df.empty:
             gr.Info(f"Analyzer '{analyzer_name}' ran successfully, but returned no results.")
@@ -691,6 +695,10 @@ def execute_sql(query, max_rows, max_cols, progress=gr.Progress()):
         progress(0.2, desc="Executing DuckDB query...")
         df = global_processor.sql(query)
         total_rows = len(df)
+        
+        # Ensure metadata is correctly captured for reporting
+        global_processor.last_action = "SQL Query"
+        global_processor.last_query = query
 
         # Update execution statistics
         execution_stats['queries_executed'] += 1
@@ -798,23 +806,47 @@ def upload_plugin(file_obj):
 def get_report_timestamp():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def add_report_section(sections, s_type, s_heading, s_body):
+def add_report_section(sections, s_type, s_heading, s_body, sql_df, analysis_df):
     """Add a new section to the report list capturing an immutable data snapshot."""
     global global_processor
     if not sections: sections = []
 
     snapshot = None
+    query = None
+    action = None
+    
     try:
-        if global_processor and getattr(global_processor, 'last_result', None) is not None:
-            snapshot = global_processor.last_result.copy(deep=True)
-            logger.info(f"[REPORT_ADD] Captured snapshot for '{s_heading}'. Data shape: {snapshot.shape}")
+        # Determine which data source to use based on section type
+        if s_type == "SQL Results Table":
+            if sql_df is not None:
+                snapshot = sql_df.copy(deep=True)
+                query = getattr(global_processor, 'last_query', None)
+                logger.info(f"[REPORT_ADD] Captured SQL snapshot for '{s_heading}'. Shape: {snapshot.shape}")
+            else:
+                logger.warning(f"[REPORT_ADD] No SQL data available for '{s_heading}'.")
+        
+        elif s_type == "Analyzer Results Table":
+            if analysis_df is not None:
+                snapshot = analysis_df.copy(deep=True)
+                action = getattr(global_processor, 'last_action', None)
+                if not action or action == "SQL Query":
+                    # Fallback if global_processor doesn't have the right action currently
+                    action = "Analyzer Result"
+                logger.info(f"[REPORT_ADD] Captured Analyzer snapshot for '{s_heading}'. Shape: {snapshot.shape}")
+            else:
+                logger.warning(f"[REPORT_ADD] No Analyzer data available for '{s_heading}'.")
+        
         else:
-            logger.warning(f"[REPORT_ADD] No data snapshot available to capture for '{s_heading}'. global_processor.last_result is None.")
+            # For Schema Info, Data Summary, etc., we don't need a dataframe snapshot in 'data'
+            # but we'll check if global_processor exists
+            if global_processor is None:
+                logger.warning(f"[REPORT_ADD] global_processor is None for section type '{s_type}'.")
+
     except Exception as e:
         logger.error(f"[REPORT_ADD] Failed to capture snapshot: {e}")
         snapshot = None
 
-    new_section = {"type": s_type, "heading": s_heading, "body": s_body, "data": snapshot}
+    new_section = {"type": s_type, "heading": s_heading, "body": s_body, "data": snapshot, "query": query, "action": action}
     sections.append(new_section)
     return sections, f"✅ Added section: {s_heading}"
 def remove_report_section(sections, index):
@@ -945,6 +977,14 @@ def generate_interactive_html(title, author, sections):
             # Handle Tables
             elif s.get('type') in ["Analyzer Results Table", "SQL Results Table"]:
                 df = s.get('data')
+                query = s.get('query')
+                action = s.get('action')
+                
+                if s.get('type') == "SQL Results Table" and query:
+                    parts.append(f"<div style='margin-bottom:10px; opacity:0.8;'><small><strong>Source SQL:</strong></small><pre style='background:#1e293b; padding:10px; border-radius:4px; font-size:12px;'><code>{query}</code></pre></div>")
+                elif s.get('type') == "Analyzer Results Table" and action:
+                    parts.append(f"<div style='margin-bottom:10px; opacity:0.8;'><small><strong>Analyzer:</strong> {action}</small></div>")
+
                 logger.info(f"[HTML_GEN] Section {i+1} data check: {df is not None}")
                 if df is not None:
                     try:
@@ -1524,6 +1564,14 @@ def generate_report_markdown(title, author, sections):
         elif s.get('type') in ["Analyzer Results Table", "SQL Results Table"]:
             logger.info(f"[MD_GEN] Processing table data for section {i+1}")
             df = s.get('data')
+            query = s.get('query')
+            action = s.get('action')
+
+            if s.get('type') == "SQL Results Table" and query:
+                md += f"**Source SQL:**\n```sql\n{query}\n```\n\n"
+            elif s.get('type') == "Analyzer Results Table" and action:
+                md += f"**Analyzer:** {action}\n\n"
+
             if df is not None:
                 md += f"```csv\n{df.to_csv(index=False)}\n```\n\n"
             else:
@@ -2337,7 +2385,7 @@ def create_ui():
         # Report Builder Handlers
         add_section_btn.click(
             fn=add_report_section,
-            inputs=[report_sections_state, report_section_type, report_section_heading, report_section_body],
+            inputs=[report_sections_state, report_section_type, report_section_heading, report_section_body, sql_state, analysis_state],
             outputs=[report_sections_state, progress_box]
         ).then(
             fn=render_sections_view,
