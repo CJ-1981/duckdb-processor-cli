@@ -2343,21 +2343,23 @@ def create_ui():
                     # -----------------------------
                     with gr.Tab("Query Editor"):
                         with gr.Row():
-                            with gr.Column(scale=2, elem_id="sql_editor_wrapper"):
-                                with gr.Row(elem_classes=["editor-header-row"]):
-                                    gr.Markdown("### Query Editor")
-                                    sql_fullscreen_btn = gr.Button("🔲 Full Size", variant="secondary", size="sm", elem_classes=["fullscreen-btn"], elem_id="sql_fullscreen_btn")
-                                    
-                                sql_input = gr.Code(
-                                    label="",
-                                    language="sql",
-                                    lines=10,
-                                    value="SELECT * FROM data LIMIT 10;",
-                                    interactive=True,
-                                    elem_id="sql_editor"
-                                )
+                            with gr.Column(scale=2):
+                                with gr.Column(elem_id="sql_editor_wrapper"):
+                                    with gr.Row(elem_classes=["editor-header-row"]):
+                                        gr.Markdown("### Query Editor")
+                                        sql_fullscreen_btn = gr.Button("🔲 Full Size", variant="secondary", size="sm", elem_classes=["fullscreen-btn"], elem_id="sql_fullscreen_btn")
+                                        
+                                    sql_input = gr.Code(
+                                        label="",
+                                        language="sql",
+                                        lines=10,
+                                        value="SELECT * FROM data LIMIT 10;",
+                                        interactive=True,
+                                        elem_id="sql_editor"
+                                    )
                                 
                                 sql_fullscreen_btn.click(None, None, None, js="() => toggleFullscreen('sql_editor_wrapper', 'sql_fullscreen_btn')")
+                                
                                 with gr.Row():
                                     run_sql_btn = gr.Button("▶️ Run Query", variant="primary", elem_classes=["btn-run"], elem_id="run_sql_btn")
                                     format_btn = gr.Button("✨ Prettify SQL", elem_classes=["btn-format"], elem_id="format_btn")
