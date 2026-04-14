@@ -109,8 +109,6 @@ logs/
 *.temp
 *.bak
 *.backup
-input/
-output/
 
 # ===========================================
 # Backups
@@ -208,6 +206,8 @@ dist-ssr/
 .firebase/
 
 # User Custom Patterns (preserved by moai update)
+input/
+output/
 duckdb_output_*.txt
 duckdb_output_*.csv
 duckdb_export_*.csv

@@ -100,6 +100,92 @@ Tasks for the Explore subagent:
 - Go through related test files to understand expected behavior and edge cases
 - Report comprehensive results for Phase 1B context
 
+### Phase 0.3: Clarity Evaluation (Conditional)
+
+Purpose: Evaluate how clearly the user's request is specified before beginning deep research. A vague request produces a weaker SPEC; this phase detects vagueness early and gathers missing context through a structured interview.
+
+**Skip conditions (any one is sufficient):**
+- `--skip-interview` flag is present in $ARGUMENTS
+- Input matches `resume SPEC-XXX` pattern (resuming an existing draft)
+- Input contains 5 or more distinct technical keywords (e.g., framework names, file paths, function names, domain terms)
+- `interview.enabled: false` in `.moai/config/sections/interview.yaml`
+
+**Clarity Scoring (1-10):**
+
+Evaluate the user's input against five dimensions:
+
+1. Technical keyword count: 2+ points for 3-4 keywords; 1 point for 1-2; 0 for none
+2. Action verbs specificity: "add CRUD endpoints for user profile" scores higher than "improve the app"
+3. File or module mentions: explicit file paths or module names each add 1 point
+4. Generic nouns penalty: deduct 1 point for each vague noun like "system", "feature", "thing"
+5. Scope boundary clarity: a defined boundary ("only the POST /users endpoint, no auth changes") adds 2 points
+
+**Score-to-rounds mapping:**
+
+| Clarity Score | Interview Rounds |
+|---|---|
+| 1-3 | 0 (request too vague — ask one broad clarification question instead) |
+| 4-6 | 2 rounds maximum |
+| 7-10 | 5 rounds maximum |
+
+Log the score: "Clarity score: {N}/10 — proceeding with {M} interview round(s)."
+
+If score is 1-3: Use a single AskUserQuestion asking for a clearer description, then re-evaluate. Do not enter the full interview loop.
+
+### Phase 0.3.1: Deep Interview Loop (Conditional)
+
+Purpose: Gather missing context through a structured, topic-focused interview before research begins. Each round presents curated options so the user can answer quickly.
+
+**Entry condition:** Clarity score 4-10 AND skip conditions not met (from Phase 0.3).
+
+**Guard:** [HARD] During the interview loop, the agent MUST NOT write implementation code or start codebase exploration. The sole output is `.moai/specs/SPEC-{ID}/interview.md`.
+
+**Round topics:**
+
+| Round | Focus Topic | Example Questions |
+|---|---|---|
+| 1 | Scope | What is included and explicitly excluded? |
+| 2 | Constraints | Performance, security, compatibility, technology limits |
+| 3 | Success criteria | How do we know when this is done and working correctly? |
+| 4 | Edge cases | What unusual or failure scenarios must be handled? |
+| 5 | Priority | What is the minimum viable slice if scope must be cut? |
+
+**Per-round execution:**
+
+For each round:
+
+1. Formulate 3 recommended options relevant to the current topic and the user's request context.
+2. Present via AskUserQuestion with exactly 4 options:
+   - Option 1: [Recommended based on context] (Recommended): [Detailed description of this answer]
+   - Option 2: [Alternative]: [Description]
+   - Option 3: [Alternative]: [Description]
+   - Option 4: Type your own answer: Enter a custom response if none of the above match
+3. Record the user's answer.
+4. Re-evaluate clarity score after each round.
+5. If updated clarity score drops to 3 or below: end the loop early (user's answers added no useful information).
+6. If updated clarity score reaches 8 or above: end the loop early (sufficient clarity achieved).
+7. Display round counter: "Interview round {N}/{max_rounds}"
+
+**Output:** Write all interview answers to `.moai/specs/SPEC-{ID}/interview.md` with this structure:
+
+```
+# Interview: {SPEC Title}
+
+## Round 1: Scope
+Question: {question asked}
+Answer: {user's answer}
+
+## Round 2: Constraints
+...
+
+## Clarity Score
+Initial: {N}/10
+Final: {N}/10
+Rounds completed: {N}
+```
+
+**Context passing:** Pass `interview.md` to Phase 0.5 (Deep Research) and Phase 1B (SPEC Planning) as additional context. Both agents MUST read interview.md before proceeding.
+
 ### Phase 0.4: UltraThink Auto-Activation (Conditional)
 
 Purpose: Automatically activate deep analysis mode for complex SPECs that benefit from structured reasoning.
@@ -292,10 +378,40 @@ File generation (all three files created simultaneously):
   - Edge case testing scenarios
   - Performance and quality gate criteria
 
+### Delta Markers for Brownfield Projects
+
+When the SPEC modifies existing code (detected via research.md analysis), apply delta markers:
+
+```
+### [DELTA] {Module Name}
+- [EXISTING] {description} - unchanged context, characterization tests only
+- [MODIFY] {description} - existing code to change, requires characterization tests before modification
+- [NEW] {description} - new code to create, full implementation + new tests
+- [REMOVE] {description} - code to delete, requires dependency analysis and migration verification
+```
+
+Delta markers are OPTIONAL and only suggested for brownfield projects. Greenfield projects skip this.
+
+### spec-compact.md Auto-Generation
+
+After all SPEC files are created, auto-generate `.moai/specs/SPEC-{ID}/spec-compact.md`:
+
+Extract from spec.md:
+- All REQ-XXX requirements (EARS format entries)
+- All acceptance criteria (Given/When/Then scenarios)
+- Files to modify list
+- Exclusions (What NOT to Build) section
+
+Exclude: Overview, technical approach, research references, annotation history.
+
+Purpose: Run phase loads spec-compact.md (~30% token savings) instead of full spec.md.
+Fallback: If generation fails, Run phase uses full spec.md.
+
 Quality constraints:
 - Requirement modules limited to 5 or fewer per SPEC
 - Acceptance criteria minimum 2 Given/When/Then scenarios
 - Technical terms and function names remain in English
+- Exclusions section MUST contain at least 1 entry
 
 ### Phase 2.5: GitHub Issue Creation (Conditional)
 
@@ -449,39 +565,44 @@ Options:
 
 Triggered when: User selects "Start Implementation" in Decision Point 3.
 
-**Step 1 — Detect active mode:**
+Purpose: After SPEC creation, detect execution environment and present optimal implementation mode.
+
+**Step 1: Detect active LLM mode**
 Read `.moai/config/sections/llm.yaml` → `llm.team_mode` field:
-- `""` (empty) = CC mode (all agents use Claude)
-- `"glm"` = GLM mode (all agents use GLM)
-- `"cg"` = CG mode (Leader=Claude, Workers=GLM)
+- `""` (empty) or `"cc"`: CC mode (Claude-only)
+- `"glm"`: GLM mode (GLM-only)
+- `"cg"`: CG mode (Claude Leader + GLM Workers)
 
-**Step 2 — Detect tmux availability:**
-Bash: `test -n "$TMUX" && echo "tmux" || echo "no-tmux"`
+**Step 2: Detect tmux availability**
+Check `$TMUX` environment variable via Bash: `test -n "$TMUX" && echo "tmux" || echo "no-tmux"`
 
-**Step 3 — Present options when tmux is available:**
-AskUserQuestion with 3 options (descriptions adapt to active_mode):
+**Step 3: Present options based on detection**
+
+When tmux IS available: AskUserQuestion with 3 options (descriptions adapt to active_mode):
 - Option 1 (Recommended): Worktree + {active_mode}
-  - CC: "독립 worktree에서 CC 모드 실행. 모든 에이전트 Claude. 최고 품질."
-  - GLM: "독립 worktree에서 GLM 모드 실행. 모든 에이전트 GLM. 비용 최적화."
-  - CG: "독립 worktree에서 CG 모드 실행. Leader=Claude, Workers=GLM. 품질-비용 균형."
-- Option 2: Team Mode — 현재 세션에서 Agent Teams 실행. Worktree 없이 직접 실행.
-- Option 3: Sub-agent Mode — 순차 실행. 가장 안정적이고 토큰 효율적.
+  - CC: "Create MoAI worktree with tmux session. All agents use Claude. Highest quality."
+  - GLM: "Create MoAI worktree with tmux session. All agents use GLM. Cost optimized."
+  - CG: "Create MoAI worktree with tmux session. Leader=Claude, Workers=GLM. Balanced quality-cost."
+- Option 2: Team Mode (in-process): Use Agent Teams for parallel implementation within current session. Best for multi-domain features.
+- Option 3: Sub-agent Mode (sequential): Use sequential sub-agents. Best for simple, single-domain tasks.
 
-**Step 3 (tmux unavailable):** AskUserQuestion with 2 options:
-- Option 1 (Recommended): Sub-agent Mode — 순차 실행. tmux 없이 가장 안정적.
-- Option 2: Team Mode (in-process) — 현재 세션에서 Agent Teams 실행.
+When tmux is NOT available: AskUserQuestion with 2 options:
+- Option 1 (Recommended): Sub-agent Mode: Use sequential sub-agents for implementation. Tmux is not available for session isolation.
+- Option 2: Team Mode (in-process): Use Agent Teams for parallel implementation within current session.
 
-**Step 4 — Worktree 선택 시 실행:**
-- CC: 추가 env 설정 불필요. worktree 생성 후 새 tmux 세션에서 claude 실행.
-- GLM: 새 tmux 세션에 injectTmuxSessionEnv()로 GLM env 주입 후 실행.
-- CG: 새 tmux 세션에 injectTmuxSessionEnv() 적용 + settings.local.json에서 GLM env 제거(Leader 격리).
-- 새 tmux 세션에서 worktree 디렉터리로 이동 후 `/moai run SPEC-{ID}` 실행.
-- 현재 세션 종료 (worktree 세션이 독립적으로 실행됨).
+**Step 4: Execute selected mode**
+- **Worktree mode**: Execute `moai worktree new SPEC-{ID} --tmux` to create worktree with tmux session. The tmux session will:
+  - CC mode: Create session, cd to worktree, run `/moai run SPEC-{ID}`
+  - GLM mode: Create session, inject GLM env, cd to worktree, run `/moai run SPEC-{ID}`
+  - CG mode: Create session, inject GLM env to session, clear GLM from settings.local.json, cd to worktree, run `/moai run SPEC-{ID}`
+  - Display: "Implementation started in tmux session: moai-{ProjectName}-{SPEC-ID}"
+- **Team mode**: Proceed to `/moai run SPEC-{ID} --team`
+- **Sub-agent mode**: Proceed to `/moai run SPEC-{ID} --solo`
 
-**Step 5 — Gate 결과를 run 워크플로우에 전달:**
-- `execution_mode`: worktree | team | sub-agent
-- `active_mode`: cc | glm | cg
-- `tmux_available`: true | false
+**Step 5: Gate result passing**
+- Pass the selected execution mode to the run workflow
+- If worktree mode: Run workflow executes in the tmux session (no further action needed from plan)
+- If team/sub-agent mode: Continue to run workflow in current session
 
 ---
 
@@ -505,10 +626,13 @@ All of the following must be verified:
 
 - Phase 1: manager-spec analyzed project and proposed SPEC candidates
 - User approval obtained via AskUserQuestion before SPEC creation
-- Phase 2: All 3 SPEC files created (spec.md, plan.md, acceptance.md)
+- Phase 2: All SPEC files created (spec.md, plan.md, acceptance.md, spec-compact.md)
 - Directory naming follows .moai/specs/SPEC-{ID}/ format
 - YAML frontmatter contains all 8 required fields (including issue_number)
 - EARS structure is complete
+- Exclusions section present with at least 1 entry
+- Delta markers applied for brownfield requirements (if applicable)
+- spec-compact.md auto-generated with requirements + acceptance criteria only
 - Phase 2.5: GitHub Issue created and linked (unless --no-issue)
 - Phase 3: Appropriate git action taken based on flags and user choice
 - If --worktree: SPEC committed before worktree creation
