@@ -647,7 +647,7 @@ def run_analysis(analyzer_name, max_rows, max_cols, progress=gr.Progress()):
     global global_processor
     logger.info(f"Running analysis: {analyzer_name}, max_rows={max_rows}, max_cols={max_cols}")
     if global_processor is None:
-        raise gr.Error("No data loaded. Please upload a file first.")
+        raise gr.Error("No data loaded. Please upload your CSV file(s) and click 'Load Data' in the left-hand column first.")
     
     if not analyzer_name:
         gr.Warning("Please select an analyzer.")
@@ -667,7 +667,16 @@ def run_analysis(analyzer_name, max_rows, max_cols, progress=gr.Progress()):
         df = global_processor.last_result
         if df is None or df.empty:
             gr.Info(f"Analyzer '{analyzer_name}' ran successfully, but returned no results.")
-            return f"✅ Analyzer '{analyzer_name}' ran successfully!", gr.update(), gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), None, gr.update(), gr.update(), gr.update(), gr.update()
+            return (
+                gr.update(value=None),                   # analysis_results
+                gr.update(),                             # analysis_css_override
+                gr.update(visible=False),                # bar plot
+                gr.update(visible=False),                # line plot
+                gr.update(visible=False),                # scatter plot
+                gr.update(),                             # chart dropdown
+                None,                                    # analysis_state
+                gr.update(), gr.update(), gr.update(), gr.update() # axis dropdowns
+            )
             
         progress(0.7, desc="Formatting and charting...")
         height_px = int(max_rows) * 35 + 80
@@ -703,7 +712,7 @@ def execute_sql(query, max_rows, max_cols, progress=gr.Progress()):
     global global_processor, execution_stats
     logger.info(f"Executing SQL query, max_rows={max_rows}, max_cols={max_cols}")
     if global_processor is None:
-        raise gr.Error("No data loaded. Please upload a file first.")
+        raise gr.Error("No data loaded. Please upload your CSV file(s) and click 'Load Data' in the left-hand column first.")
 
     if not query or not query.strip():
         gr.Warning("SQL query is empty.")

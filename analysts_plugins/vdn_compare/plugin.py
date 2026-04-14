@@ -166,7 +166,7 @@ class VdnComparePlugin(BaseAnalyzer):
     """Compares Source (DB) and Target (PIE) VDN/SW/Model data."""
 
     name = "vdn_compare"
-    description = "Compare Source and Target VDN/SW/Model data (DB vs PIE)"
+    description = "Compare Source and Target VDN data (Load both CSVs in Data Preview tab first)"
 
     # ── Configuration loading ─────────────────────────────────
 
@@ -218,13 +218,16 @@ class VdnComparePlugin(BaseAnalyzer):
         
         # 4. Fallback or Error
         if not is_interactive:
+            msg = ""
             if len(tables) == 1:
-                _cprint(f"[bold red]Error:[/bold red] Only one table loaded ('{tables[0]}'). "
-                        "vdn_compare needs two tables to compare.")
+                msg = f"Only one table loaded ('{tables[0]}'). vdn_compare needs TWO tables to compare."
             else:
-                _cprint("[bold red]Error: No data tables loaded.[/bold red]")
-            _cprint("[yellow]Hint: Load two CSV files first (e.g. source.csv target.csv).[/yellow]")
-            return None
+                msg = "No data tables loaded. vdn_compare needs TWO tables to compare."
+            
+            _cprint(f"[bold red]Error:[/bold red] {msg}")
+            _cprint("[bold yellow]In Gradio, upload BOTH files together in 'Data Preview' and click 'Load Data'.[/bold yellow]")
+            _cprint("[cyan]Tip: Use 'source_db, target_db' in Table Mapping field for clarity.[/cyan]")
+            raise RuntimeError(msg)
 
         # 5. Interactive Tkinter dialog (CLI fallback only)
         try:
