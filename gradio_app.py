@@ -837,13 +837,20 @@ def get_plugin_files():
     """List all editable plugin files from both built-in and custom directories."""
     files = []
     
-    # Custom plugins
+    # Custom plugins (flat .py files and subdirectory plugin packages)
     base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
     plugins_dir = os.path.join(base_dir, "analysts_plugins")
     if os.path.exists(plugins_dir):
         for f in os.listdir(plugins_dir):
+            full_path = os.path.join(plugins_dir, f)
+            # Flat .py plugin
             if f.endswith(".py") and not f.startswith("_"):
                 files.append(f"custom/{f}")
+            # Subdirectory plugin package with a plugin.py entry point
+            elif os.path.isdir(full_path) and not f.startswith("_"):
+                plugin_entry = os.path.join(full_path, "plugin.py")
+                if os.path.exists(plugin_entry):
+                    files.append(f"custom/{f}/plugin.py")
     
     # Built-in analyzers (read-only technically, but we'll allow loading for editing/saving as custom)
     import duckdb_processor.analysts as analysts_pkg
@@ -863,11 +870,13 @@ def load_plugin_file(file_path):
     try:
         base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
         if file_path.startswith("custom/"):
-            full_path = os.path.join(base_dir, "analysts_plugins", file_path.replace("custom/", ""))
+            # Handles both flat (custom/foo.py) and subdirectory (custom/foo/plugin.py)
+            rel = file_path.replace("custom/", "", 1)
+            full_path = os.path.join(base_dir, "analysts_plugins", rel)
         elif file_path.startswith("built-in/"):
             import duckdb_processor.analysts as analysts_pkg
             builtin_path = analysts_pkg.__path__[0]
-            full_path = os.path.join(builtin_path, file_path.replace("built-in/", ""))
+            full_path = os.path.join(builtin_path, file_path.replace("built-in/", "", 1))
         else:
             return "⚠️ Unknown file path format."
             
