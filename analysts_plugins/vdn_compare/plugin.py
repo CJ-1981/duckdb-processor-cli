@@ -188,27 +188,45 @@ class VdnComparePlugin(BaseAnalyzer):
     def _acquire_files(self, p) -> Optional[tuple[pd.DataFrame, pd.DataFrame, str, str]]:
         """Return (df_source, df_target, source_label, target_label).
 
-        Priority:
-        1. If 'source_db' and 'target_db' table names were loaded by the CLI.
-        2. If exactly 2 tables were loaded (first = source, second = target).
-        3. Fall back to Tkinter file-pick dialog.
+        Strategy:
+        1. Use 'source_db' and 'target_db' if they exist.
+        2. Use the first two loaded tables if available.
+        3. If exactly one table is loaded, use it as 'source' and ONLY ask for 'target'.
+        4. If no tables are loaded and we are in an interactive CLI, ask for both.
+        5. If in Gradio or non-interactive CLI, error out if tables are missing.
         """
-        tables = p.get_tables() if hasattr(p, 'get_tables') else [p.table]
+        tables = p.get_tables() if hasattr(p, 'get_tables') else []
+        if not tables and hasattr(p, 'table'):
+            tables = [p.table]
 
-        # Named tables take precedence
+        # 1. Named tables take precedence
         if 'source_db' in tables and 'target_db' in tables:
             _cprint("[cyan]Using pre-loaded tables 'source_db' and 'target_db'.[/cyan]")
-            df_src = p.con.execute("SELECT * FROM source_db").df()
-            df_tgt = p.con.execute("SELECT * FROM target_db").df()
+            df_src = p.con.execute('SELECT * FROM "source_db"').df()
+            df_tgt = p.con.execute('SELECT * FROM "target_db"').df()
             return df_src, df_tgt, "source_db", "target_db"
 
+        # 2. Exactly two tables (or more)
         if len(tables) >= 2:
             _cprint(f"[cyan]Using first two loaded tables: '{tables[0]}' (source) and '{tables[1]}' (target).[/cyan]")
             df_src = p.con.execute(f'SELECT * FROM "{tables[0]}"').df()
             df_tgt = p.con.execute(f'SELECT * FROM "{tables[1]}"').df()
             return df_src, df_tgt, tables[0], tables[1]
 
-        # Fall back to Tkinter dialog
+        # 3. Environment check
+        is_interactive = sys.stdin.isatty() and not 'gradio' in sys.modules
+        
+        # 4. Fallback or Error
+        if not is_interactive:
+            if len(tables) == 1:
+                _cprint(f"[bold red]Error:[/bold red] Only one table loaded ('{tables[0]}'). "
+                        "vdn_compare needs two tables to compare.")
+            else:
+                _cprint("[bold red]Error: No data tables loaded.[/bold red]")
+            _cprint("[yellow]Hint: Load two CSV files first (e.g. source.csv target.csv).[/yellow]")
+            return None
+
+        # 5. Interactive Tkinter dialog (CLI fallback only)
         try:
             import tkinter as tk
             from tkinter import filedialog
@@ -217,31 +235,29 @@ class VdnComparePlugin(BaseAnalyzer):
             root.withdraw()
             root.attributes('-topmost', True)
 
-            _cprint("[cyan]Please select the Source file (DB)...[/cyan]")
-            source_path = filedialog.askopenfilename(
-                title="Select Source file (DB)",
-                filetypes=[("CSV/Excel files", "*.csv *.xlsx *.xls"), ("All files", "*.*")]
-            )
-            if not source_path:
-                _cprint("[bold red]No source file selected. Aborting vdn_compare.[/bold red]")
-                return None
+            df_src, src_label = None, ""
+            df_tgt, tgt_label = None, ""
+
+            # Use existing table as source if available
+            if len(tables) == 1:
+                _cprint(f"[cyan]Using existing table '{tables[0]}' as Source.[/cyan]")
+                df_src = p.con.execute(f'SELECT * FROM "{tables[0]}"').df()
+                src_label = tables[0]
+            else:
+                _cprint("[cyan]Please select the Source file (DB)...[/cyan]")
+                path = filedialog.askopenfilename(title="Select Source file (DB)", 
+                                                   filetypes=[("CSV/Excel", "*.csv *.xlsx *.xls")])
+                if not path: return None
+                df_src, src_label = _load_file(path), os.path.basename(path)
 
             _cprint("[cyan]Please select the Target file (PIE)...[/cyan]")
-            target_path = filedialog.askopenfilename(
-                title="Select Target file (PIE)",
-                filetypes=[("CSV/Excel files", "*.csv *.xlsx *.xls"), ("All files", "*.*")]
-            )
-            if not target_path:
-                _cprint("[bold red]No target file selected. Aborting vdn_compare.[/bold red]")
-                return None
+            path = filedialog.askopenfilename(title="Select Target file (PIE)", 
+                                               filetypes=[("CSV/Excel", "*.csv *.xlsx *.xls")])
+            if not path: return None
+            df_tgt, tgt_label = _load_file(path), os.path.basename(path)
 
             root.destroy()
-
-            _cprint(f"[cyan]Loading Source:[/cyan] [bold white]{source_path}[/bold white]")
-            df_src = _load_file(source_path)
-            _cprint(f"[cyan]Loading Target:[/cyan] [bold white]{target_path}[/bold white]")
-            df_tgt = _load_file(target_path)
-            return df_src, df_tgt, os.path.basename(source_path), os.path.basename(target_path)
+            return df_src, df_tgt, src_label, tgt_label
 
         except Exception as exc:
             _cprint(f"[bold red]Error acquiring files: {exc}[/bold red]")
