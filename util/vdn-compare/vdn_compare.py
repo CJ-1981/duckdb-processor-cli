@@ -8,6 +8,8 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog
 
+__version__ = "1.0.0"
+
 # Windows UTF-8 re-configuration for correct box character rendering
 if os.name == 'nt':
     import sys
@@ -87,6 +89,8 @@ def save_dataframe(df, file_path, fmt):
 
 def main():
     import time
+
+    cprint(f"[bold cyan]VDN Compare[/bold cyan] [dim]v{__version__}[/dim]")
     
     parser = argparse.ArgumentParser(description="Compare Source and Target VDN reports.")
     parser.add_argument('--source', help="Source file", default="input/DB.csv")
