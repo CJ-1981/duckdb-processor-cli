@@ -647,7 +647,7 @@ def run_analysis(analyzer_name, max_rows, max_cols, progress=gr.Progress()):
     global global_processor
     logger.info(f"Running analysis: {analyzer_name}, max_rows={max_rows}, max_cols={max_cols}")
     if global_processor is None:
-        raise gr.Error("No data loaded. Please upload a file first.")
+        raise gr.Error("No data loaded. Please upload your CSV file(s) and click 'Load Data' in the left-hand column first.")
     
     if not analyzer_name:
         gr.Warning("Please select an analyzer.")
@@ -667,7 +667,16 @@ def run_analysis(analyzer_name, max_rows, max_cols, progress=gr.Progress()):
         df = global_processor.last_result
         if df is None or df.empty:
             gr.Info(f"Analyzer '{analyzer_name}' ran successfully, but returned no results.")
-            return f"✅ Analyzer '{analyzer_name}' ran successfully!", gr.update(), gr.update(), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), None, gr.update(), gr.update(), gr.update(), gr.update()
+            return (
+                gr.update(value=None),                   # analysis_results
+                gr.update(),                             # analysis_css_override
+                gr.update(visible=False),                # bar plot
+                gr.update(visible=False),                # line plot
+                gr.update(visible=False),                # scatter plot
+                gr.update(),                             # chart dropdown
+                None,                                    # analysis_state
+                gr.update(), gr.update(), gr.update(), gr.update() # axis dropdowns
+            )
             
         progress(0.7, desc="Formatting and charting...")
         height_px = int(max_rows) * 35 + 80
@@ -703,7 +712,7 @@ def execute_sql(query, max_rows, max_cols, progress=gr.Progress()):
     global global_processor, execution_stats
     logger.info(f"Executing SQL query, max_rows={max_rows}, max_cols={max_cols}")
     if global_processor is None:
-        raise gr.Error("No data loaded. Please upload a file first.")
+        raise gr.Error("No data loaded. Please upload your CSV file(s) and click 'Load Data' in the left-hand column first.")
 
     if not query or not query.strip():
         gr.Warning("SQL query is empty.")
@@ -837,13 +846,20 @@ def get_plugin_files():
     """List all editable plugin files from both built-in and custom directories."""
     files = []
     
-    # Custom plugins
+    # Custom plugins (flat .py files and subdirectory plugin packages)
     base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
     plugins_dir = os.path.join(base_dir, "analysts_plugins")
     if os.path.exists(plugins_dir):
         for f in os.listdir(plugins_dir):
+            full_path = os.path.join(plugins_dir, f)
+            # Flat .py plugin
             if f.endswith(".py") and not f.startswith("_"):
                 files.append(f"custom/{f}")
+            # Subdirectory plugin package with a plugin.py entry point
+            elif os.path.isdir(full_path) and not f.startswith("_"):
+                plugin_entry = os.path.join(full_path, "plugin.py")
+                if os.path.exists(plugin_entry):
+                    files.append(f"custom/{f}/plugin.py")
     
     # Built-in analyzers (read-only technically, but we'll allow loading for editing/saving as custom)
     import duckdb_processor.analysts as analysts_pkg
@@ -863,11 +879,13 @@ def load_plugin_file(file_path):
     try:
         base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
         if file_path.startswith("custom/"):
-            full_path = os.path.join(base_dir, "analysts_plugins", file_path.replace("custom/", ""))
+            # Handles both flat (custom/foo.py) and subdirectory (custom/foo/plugin.py)
+            rel = file_path.replace("custom/", "", 1)
+            full_path = os.path.join(base_dir, "analysts_plugins", rel)
         elif file_path.startswith("built-in/"):
             import duckdb_processor.analysts as analysts_pkg
             builtin_path = analysts_pkg.__path__[0]
-            full_path = os.path.join(builtin_path, file_path.replace("built-in/", ""))
+            full_path = os.path.join(builtin_path, file_path.replace("built-in/", "", 1))
         else:
             return "⚠️ Unknown file path format."
             
@@ -1639,10 +1657,101 @@ button[title*='Record'], button[title*='Screen'],
 /* Export Buttons */
 button.btn-export, .btn-export {
     color: #4A90E2 !important;
-    border: 1px solid #B0B0B0 !important;
+    border: 1px solid #B0C4DE !important;
+}
+
+/* Fullscreen editor styling */
+.editor-fullscreen {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    min-width: 100vw !important;
+    height: 100vh !important;
+    z-index: 10000 !important;
+    padding: 20px 40px !important;
+    box-sizing: border-box !important;
+    background: #FFFFFF !important;
+    display: flex !important;
+    flex-direction: column !important;
+    margin: 0 !important;
+    transform: none !important;
+    flex: 1 1 100% !important; /* Force flex expansion */
+}
+
+.dark .editor-fullscreen, [data-theme='dark'] .editor-fullscreen {
+    background: #1E1E1E !important;
+}
+
+/* Force all child Gradio blocks to expand and clear layout constraints */
+.editor-fullscreen .gr-block,
+.editor-fullscreen .gr-form,
+.editor-fullscreen .gradio-row,
+.editor-fullscreen .gradio-column {
+    flex: 1 1 auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100% !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 100% !important;
+    background: transparent !important;
+    margin: 0 !important;
+}
+
+
+.editor-fullscreen .cm-editor {
+    height: calc(100vh - 120px) !important;
+    border: 1px solid #4A90E2 !important;
+}
+
+.fullscreen-btn {
+    min-width: unset !important;
+    width: auto !important;
+    padding: 4px 10px !important;
+    font-size: 12px !important;
+    height: 30px !important;
+    margin-right: 0 !important;
+}
+
+.editor-header-row {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    width: 100% !important;
+    margin-bottom: 10px !important;
+    flex: 0 0 auto !important;
+}
+
+.editor-fullscreen .editor-header-row {
+    border-bottom: 1px solid #D1D9E6 !important;
+    padding-bottom: 10px !important;
+    margin-bottom: 20px !important;
+}
+
+.dark .editor-fullscreen .editor-header-row {
+    border-bottom: 1px solid #404040 !important;
+}
+
+/* Parent reset to clear transforms that break position: fixed */
+.fs-parent-reset {
+    transform: none !important;
+    perspective: none !important;
+    filter: none !important;
+    overflow: visible !important;
+    z-index: auto !important;
+}
+
+
+button.btn-export:hover, .btn-export:hover {
+    border: 1px solid #4A90E2 !important;
     background: transparent !important;
     transition: all 0.2s !important;
 }
+
 
 /* Checkbox fix */
 .gradio-container:not(.dark) input[type='checkbox']:checked,
@@ -2086,6 +2195,33 @@ def create_ui():
         setInterval(injectShortcutBadges, 1000);
 
         window.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                const fs = document.querySelector('.editor-fullscreen');
+                if (fs) {
+                    const id = fs.id;
+                    fs.classList.remove('editor-fullscreen');
+                    document.body.style.overflow = 'auto';
+                    
+                    // Cleanup parents
+                    document.querySelectorAll('.fs-parent-reset').forEach(p => p.classList.remove('fs-parent-reset'));
+                    
+                    // Reset button text
+                    if (id === 'sql_editor_wrapper') {
+                        const btn = document.getElementById('sql_fullscreen_btn');
+                        if (btn) {
+                             const span = btn.querySelector('span') || btn;
+                             span.innerText = "🔲 Full Size";
+                        }
+                    } else if (id === 'plugin_editor_wrapper') {
+                        const btn = document.getElementById('plugin_fullscreen_btn');
+                        if (btn) {
+                             const span = btn.querySelector('span') || btn;
+                             span.innerText = "🔲 Full Size";
+                        }
+                    }
+                }
+            }
+            
             const target = e.target;
             const isInput = (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
             if (isInput && e.ctrlKey && e.key === 'Enter') return;
@@ -2107,7 +2243,30 @@ def create_ui():
             });
         }, true);
 
-        console.log('[DUCKDB-UI] Keyboard shortcuts active.');
+        window.toggleFullscreen = function(wrapper_id, btn_id) {
+            const el = document.getElementById(wrapper_id);
+            const btn = document.getElementById(btn_id);
+            if (el) {
+                el.classList.toggle('editor-fullscreen');
+                const isFS = el.classList.contains('editor-fullscreen');
+                
+                // Toggle parent reset classes to clear transforms
+                let parent = el.parentElement;
+                while (parent && parent !== document.body) {
+                    if (isFS) parent.classList.add('fs-parent-reset');
+                    else parent.classList.remove('fs-parent-reset');
+                    parent = parent.parentElement;
+                }
+
+                if (btn) {
+                    const textNode = btn.querySelector('span') || btn;
+                    textNode.innerText = isFS ? "✖ Close" : "🔲 Full Size";
+                }
+                document.body.style.overflow = isFS ? 'hidden' : 'auto';
+            }
+        };
+
+        console.log('[DUCKDB-UI] Keyboard shortcuts and fullscreen active.');
     })();
     """
 
@@ -2194,14 +2353,22 @@ def create_ui():
                     with gr.Tab("Query Editor"):
                         with gr.Row():
                             with gr.Column(scale=2):
-                                sql_input = gr.Code(
-                                    label="Query Editor",
-                                    language="sql",
-                                    lines=10,
-                                    value="SELECT * FROM data LIMIT 10;",
-                                    interactive=True,
-                                    elem_id="sql_editor"
-                                )
+                                with gr.Column(elem_id="sql_editor_wrapper"):
+                                    with gr.Row(elem_classes=["editor-header-row"]):
+                                        gr.Markdown("### Query Editor")
+                                        sql_fullscreen_btn = gr.Button("🔲 Full Size", variant="secondary", size="sm", elem_classes=["fullscreen-btn"], elem_id="sql_fullscreen_btn")
+                                        
+                                    sql_input = gr.Code(
+                                        label="",
+                                        language="sql",
+                                        lines=10,
+                                        value="SELECT * FROM data LIMIT 10;",
+                                        interactive=True,
+                                        elem_id="sql_editor"
+                                    )
+                                
+                                sql_fullscreen_btn.click(None, None, None, js="() => toggleFullscreen('sql_editor_wrapper', 'sql_fullscreen_btn')")
+                                
                                 with gr.Row():
                                     run_sql_btn = gr.Button("▶️ Run Query", variant="primary", elem_classes=["btn-run"], elem_id="run_sql_btn")
                                     format_btn = gr.Button("✨ Prettify SQL", elem_classes=["btn-format"], elem_id="format_btn")
@@ -2289,13 +2456,22 @@ def create_ui():
                                                 scale=4
                                             )
                                             load_plugin_btn = gr.Button("📂 Load", scale=1)
-                                            
-                                        plugin_editor = gr.Code(
-                                            label="Python Plugin Editor",
-                                            language="python",
-                                            lines=20,
-                                            value=PLUGIN_TEMPLATE
-                                        )
+
+                                        with gr.Column(elem_id="plugin_editor_wrapper"):
+                                            with gr.Row(elem_classes=["editor-header-row"]):
+                                                gr.Markdown("### Plugin Editor")
+                                                plugin_fullscreen_btn = gr.Button("🔲 Full Size", variant="secondary", size="sm", elem_classes=["fullscreen-btn"], elem_id="plugin_fullscreen_btn")
+
+                                            plugin_editor = gr.Code(
+                                                label="",
+                                                language="python",
+                                                lines=20,
+                                                value=PLUGIN_TEMPLATE,
+                                                elem_id="plugin_editor"
+                                            )
+                                        
+                                        plugin_fullscreen_btn.click(None, None, None, js="() => toggleFullscreen('plugin_editor_wrapper', 'plugin_fullscreen_btn')")
+                                        
                                         with gr.Row():
                                             test_plugin_btn = gr.Button("🧪 Test Plugin (Dry Run)", variant="secondary")
                                             new_plugin_btn = gr.Button("📄 New Template")

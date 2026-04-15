@@ -107,17 +107,34 @@ def _discover_analyzers():
     
     if os.path.exists(plugins_dir):
         for filename in os.listdir(plugins_dir):
+            full_path = os.path.join(plugins_dir, filename)
+
+            # Flat .py plugin (existing behaviour)
             if filename.endswith(".py") and not filename.startswith("_"):
                 module_name = filename[:-3]
-                path = os.path.join(plugins_dir, filename)
                 try:
-                    spec = importlib.util.spec_from_file_location(module_name, path)
+                    spec = importlib.util.spec_from_file_location(module_name, full_path)
                     if spec and spec.loader:
                         module = importlib.util.module_from_spec(spec)
                         sys.modules[module_name] = module
                         spec.loader.exec_module(module)
                 except Exception as e:
                     print(f"Warning: Failed to load plugin '{filename}': {e}", file=sys.stderr)
+
+            # Subdirectory plugin package — looks for a plugin.py entry point
+            elif os.path.isdir(full_path) and not filename.startswith("_"):
+                plugin_entry = os.path.join(full_path, "plugin.py")
+                if os.path.exists(plugin_entry):
+                    module_name = f"analysts_plugins.{filename}.plugin"
+                    try:
+                        spec = importlib.util.spec_from_file_location(module_name, plugin_entry,
+                                                                       submodule_search_locations=[full_path])
+                        if spec and spec.loader:
+                            module = importlib.util.module_from_spec(spec)
+                            sys.modules[module_name] = module
+                            spec.loader.exec_module(module)
+                    except Exception as e:
+                        print(f"Warning: Failed to load plugin '{filename}/plugin.py': {e}", file=sys.stderr)
             
     _discovered = True
 
