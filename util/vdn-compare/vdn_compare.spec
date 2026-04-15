@@ -1,12 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all
+
+datas = []
+binaries = []
+hiddenimports = ['pandas', 'openpyxl', 'tqdm', 'tkinter']
+tmp_ret = collect_all('duckdb')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('rich')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('tabulate')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
     ['vdn_compare.py'],
     pathex=[],
-    binaries=[],
-    datas=[],
-    hiddenimports=['duckdb', 'pandas', 'openpyxl', 'rich', 'rich.console', 'rich.table', 'rich.box', 'tqdm', 'tkinter', 'tabulate'],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

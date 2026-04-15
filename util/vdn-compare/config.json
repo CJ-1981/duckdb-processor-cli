@@ -14,7 +14,7 @@
     "format": [
         "html"
     ],
-    "samples": "all",
+    "samples": "10",
     "sort_vin": "asc",
     "use_default_input": false,
     "column_map": {

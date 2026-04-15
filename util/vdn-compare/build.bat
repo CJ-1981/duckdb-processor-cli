@@ -25,16 +25,13 @@ pyinstaller ^
     --onefile ^
     --console ^
     --name vdn_compare ^
-    --hidden-import duckdb ^
+    --collect-all duckdb ^
+    --collect-all rich ^
     --hidden-import pandas ^
     --hidden-import openpyxl ^
-    --hidden-import rich ^
-    --hidden-import rich.console ^
-    --hidden-import rich.table ^
-    --hidden-import rich.box ^
     --hidden-import tqdm ^
     --hidden-import tkinter ^
-    --hidden-import tabulate ^
+    --collect-all tabulate ^
     vdn_compare.py
 
 if errorlevel 1 (
