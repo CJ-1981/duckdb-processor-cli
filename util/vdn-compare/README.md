@@ -30,6 +30,9 @@ Example `config.json`:
     "compare": ["sw", "vdn", "model"],
     "normalize_models": ["EX30,V216", "EX30 CC,V216-CC"],
     "normalize_sw": ["MY27 J1,27 J1"],
+    "normalize_custom": {
+        "BATTERY": ["69kWh,Standard Range", "82kWh,Extended Range"]
+    },
     "format": ["rich", "html"],
     "column_map": { 
         "Shared_Model_Header": "MODEL",
@@ -40,7 +43,7 @@ Example `config.json`:
 }
 ```
 *Note: All mapping keys (`source_map`, `target_map`, `column_map`) are merged into a single "Intelligence Pool." This allows the tool to find your headers even if you swap the Source and Target files.*
-*Note: Always map your custom column names to one of the 4 **Reserved Internal Headers** shown above (VIN, CONSUMER_SW_VERSION, VDN_LIST, MODEL). Changing the values on the right will break the internal logic.*
+*Note: The tool natively supports `VIN`, `CONSUMER_SW_VERSION`, `VDN_LIST`, and `MODEL`. You can map any other columns (like `BATTERY`) to introduce new comparison metrics dynamically.*
 
 ## Quick Start
 
@@ -71,6 +74,7 @@ python vdn_compare.py --format html rich --samples all
 - `--format`: Output format(s). Options: `html`, `md`, `rich`, `csv`.
 - `--normalize-models`: Equivalency groups for models. Format: `"Standard,Alias1,Alias2"`.
 - `--normalize-sw`: Equivalency groups for software. Format: `"Standard,Alias1,Alias2"`.
+- `--normalize-custom`: Custom normalization rules in JSON format mapping generic column names to lists of equivalent groups. Best configured via `config.json`.
 - `--samples`: Number of diagnostic samples to show in reports (integer or `all`, default: `10`).
 - `--sort-vin`: Sort results by VIN (`asc`, `desc`, or `none`, default: `asc`).
 
