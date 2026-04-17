@@ -23,5 +23,6 @@
         "DB_targetVdns": "VDN_LIST",
         "model": "MODEL",
         "region": "REGION"
-    }
+    },
+    "skip_nodata": false
 }

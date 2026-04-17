@@ -9,12 +9,16 @@ A high-performance Python utility for comparing vehicle software versions, model
 - **Auto-Feature Detection**: Dynamically scales comparison logic based on available headers—checks only what it finds.
 - **Robust 'NO DATA' Matching**: Correct identifies when both sides are missing data as a MATCH (no false positives for empty fields).
 - **Automated Reporting**: Generates a full suite of reports every run: Full Results (CSV), Mismatches Only (CSV), and Summaries in HTML, Markdown, and TXT.
-- **Interactive Reports**: HTML reports include a Table of Contents with jump-links and a floating "Back to Top" button for easy navigation of large datasets.
-- **Data-Grid Optimization**: HTML reports are optimized for extremely wide tables with sticky headers and zebra-striping.
-- **Dynamic Feature Comparison**: Adding new columns to the `column_map` (e.g., `REGION`) automatically triggers dedicated mismatch summaries, tallies, and sampling without code changes.
-- **Unique Vehicle Metrics**: Mismatch tallies (like the SW Matrix and VDN Tally) now count **unique VINs** rather than raw data occurrences for more accurate fleet statistics.
-- **Exclusion Filters**: Use `--skip-filter` to drop specific records (e.g., Test vehicles or Prototype regions) from the analysis globally.
-- **Aggregated VDN Diagnostics**: VDN mismatches are broken down into a **Pairwise Tally** (identifying specific code swaps) while aggregating "noisy" additions/removals for readability.
+- **Global Collapsible UI**: HTML reports now feature interactive toggles (details/summary) for **all** sample sections. This allows you to navigate reports with thousands of mismatches easily by expanding only what you need.
+- **Incomplete Data Auditing**: Automatically identifies vehicles with missing mandatory information (e.g., missing Model or an empty VDN list) and provides a consolidated breakdown per VIN (e.g., `VIN (Missing SW, MODEL)`).
+- **In-Place 'NO DATA' Comparison**: Correct identifies when both sides are missing data as a MATCH (no false positives for empty fields).
+- **Data-Grid Optimization**: HTML reports are optimized for extremely wide tables with sticky headers, zebra-striping, and secure, document-ready styling.
+- **Auditing & Data Integrity**: Includes a dedicated **Auditing Step** that flags duplicate VINs across files, identifies **VDN Prefix Conflicts** (e.g., multiple AT-series VDNs in one file), and catches **Incomplete Rows**.
+- **Unique Vehicle Metrics**: All mismatch tallies and statistics count **unique VINs** (individual vehicles) rather than raw row occurrences, providing accurate fleet-wide diagnostics even with messy input data.
+- **Pairwise VDN Diagnostics**: VDN mismatches are broken down into a **Pairwise Tally** (identifying specific code swaps reach-by-reach) with consolidated statistics for maximum readability.
+- **Automated Filtering**: 
+    - Use `--skip-filter` to drop specific records globally (e.g., Test vehicles) based on column values.
+    - Use `--skip-nodata` to automatically exclude any vehicle that is missing comparison data entirely from either side.
 
 ## Installation
 
@@ -42,15 +46,16 @@ Example `config.json`:
         "Shared_Model_Header": "MODEL",
         "Charge_Lvl": "BATTERY" 
     },
-    "source_map": { "DB_Header_VIN": "VIN" },
-    "target_map": { "PIE_Header_Chassis": "VIN" },
+    "s1_map": { "DB_Header_VIN": "VIN" },
+    "s2_map": { "PIE_Header_Chassis": "VIN" },
     "skip_filter": {
         "REGION": ["Internal", "Test"],
         "STATUS": ["Prototype"]
-    }
+    },
+    "skip_nodata": true
 }
 ```
-*Note: All mapping keys (`source_map`, `target_map`, `column_map`) are merged into a single "Intelligence Pool." This allows the tool to find your headers even if you swap the Source and Target files.*
+*Note: All mapping keys (`s1_map`, `s2_map`, `column_map`) are merged into a single "Intelligence Pool." This allows the tool to find your headers even if you swap the Source 1 and Source 2 files.*
 *Note: Any column mapped in `column_map` that is not a standard tool header (VIN, SW, VDN, MODEL) will be treated as a **Dynamic Comparison Target**, receiving its own tally and sample sections in all reports.*
 
 ## Quick Start
@@ -64,7 +69,7 @@ python vdn_compare.py
 ### 2. Normalization Example
 Group release candidates with final versions and align model names:
 ```bash
-python vdn_compare.py --normalize-sw "1.7.0,1.7.0.RC1" --normalize-models "EX30,V216"
+python vdn_compare.py -s1 source1.csv -s2 source2.xlsx --normalize-sw "1.7.0,1.7.0.RC1" --normalize-models "EX30,V216"
 ```
 
 ### 3. Multi-Format Audit
@@ -75,11 +80,12 @@ python vdn_compare.py --format html rich --samples all
 
 ## Argument Options
 
-- `--source`, `--target`: Manually specify input paths.
+- `-s1`, `--source1`, `-s2`, `--source2`: Manually specify input paths.
 - `--use-default-input`: Bypass the file dialog and use default paths in `input/` (`DB.csv` and `PIE.csv`).
 - `--samples`: Number of diagnostic samples to show in reports (integer or `all`, default: `10`).
 - `--sort-vin`: Sort results by VIN (`asc`, `desc`, or `none`, default: `asc`).
-- `--skip-filter`: Values to skip/exclude, in JSON format: `{"ColumnName": ["Value1", "Value2"]}`. Matching rows are dropped for both Source and Target.
+- `--skip-filter`: Values to skip/exclude, in JSON format: `{"ColumnName": ["Value1", "Value2"]}`. Matching rows are dropped for both Source 1 and Source 2.
+- `--skip-nodata`: (Boolean) Automatically skip rows where any requested comparison column is empty or null (Default: `false`).
 - `--config`: Path to a custom configuration JSON (default: `config.json`).
 - `--compare`: Comparison scope. Options: `sw`, `vdn`, `model`, `vin` (default: `sw vdn model`).
 - `--format`: Output format(s). Options: `html`, `md`, `rich`, `csv`.
