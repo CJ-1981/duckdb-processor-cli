@@ -1,0 +1,48 @@
+import json
+import pandas as pd
+
+def parse_vdn(val):
+    if pd.isna(val) or str(val).strip() in ('nan', ''): return []
+    val_str = str(val).strip()
+    if val_str.startswith('[') and val_str.endswith(']'):
+        try:
+            parsed = json.loads(val_str.replace("'", '"'))
+            if isinstance(parsed, list):
+                result = sorted(set(str(v).strip() for v in parsed if str(v).strip()))
+                return result if result else []
+        except Exception:
+            pass
+    chunks = [val_str[i:i+4] for i in range(0, len(val_str), 4)]
+    result = sorted(set(c for c in chunks if c.strip()))
+    return result if result else []
+
+s1_val = '["N401", "KP01", "ST02", "C405", "KX02", "KHA2", "L903", "EW02", "RB02", "BK01", "DF01", "VH02", "TM01", "ZN01", "HC03", "AY06", "LJ03", "U703", "F9A1", "S401", "NM02", "HL03", "BS16", "LR04", "M302", "DN02", "HT01", "JW01", "NU01", "CT01", "K802", "K924", "LZ03", "SD01", "UG01", "CL01", "E705", "GB02", "CD01", "CE40", "KG06", "EF01", "P601", "G9A1", "QP03", "SS01", "EN02", "KW01", "N305", "QX01", "BJ06", "VO01", "DE03", "H2A3", "JE01", "HB04", "F8A2", "AX03", "S302", "NL04", "DM01", "VX01", "HS01", "AP01", "CS01", "JB91", "LY03", "SC01", "G1A2", "GA01", "C3A4", "YL02", "CC02", "ND15", "SK01", "MQ02", "G8A2", "PN19", "SR02", "EM03", "SZ04", "KV03", "QW02", "MA10", "H902", "PE02", "XQ01", "TC01", "H1A1", "B9A1", "DD06", "NK22", "NJ02", "JD04", "HA03", "LG01", "TK01", "ME7C", "F7A2", "NS01", "LH04", "HJ04", "LP07", "AW01", "DL01", "MZ13", "HR02", "K601", "M901", "RY01", "Q7A2", "UE02", "SB01", "CJ01", "AA48", "UM02", "YK02", "CB02", "SJ02", "QV01", "ED02", "G7A3", "BX04", "KM02", "L601", "EL02", "YZ02", "KU02", "ET01", "NA01", "PD01", "TJ01", "TB02", "JC01", "LF03", "F5A1", "JL01", "F6A3", "NR02", "S106", "YB01", "TS02", "HK47", "RP03", "DK01", "LW02", "M802", "CQ01", "MB42", "E402", "HY02", "VN14", "SA02", "UD02", "NB10", "C1A6", "KE04", "KL02", "T902", "EC03", "BW07", "SP03", "C802", "MW03", "TA01", "E550", "GV01", "BG05", "CA18", "NH04", "B7A1", "RN01", "DB05", "D2A5", "PC05", "H7A1", "FD01", "LE03", "D1A3", "DA02", "HH01", "LN01", "TZ01", "CX04", "D904", "DJ01", "TR02", "JS01", "K401", "LV03", "DR01", "HX03", "SH02", "QE02", "QM01", "US01", "KD01", "AE01", "G6A1", "KK02", "EJ01", "C701", "L401", "X607", "N701", "KS04", "J903", "GU02", "RE01", "BF06", "PB01", "P2A1", "NG05", "RM01", "U101", "VC05", "B6A2", "MF17", "LD06", "MG32", "F3A2", "JA05", "NP02", "HG01", "LM01", "TY01", "GF15", "S701", "GG37", "UB02", "D802", "LU01", "XW01", "AT01", "CW01", "K301", "AL05", "E201", "XB7E", "DY01", "JZ04", "G5A2", "GE01", "KJ04", "UY03", "BA99", "PR10", "MM03", "L304", "KR02", "EAA1", "N602", "P901", "TG01", "PA01", "DH03", "RL02", "B5A1", "NF02", "H5A2", "HE01", "HF03", "LL02", "KC19", "HN01", "LT03", "CV03", "UA02", "D701", "AS01", "DP01", "HV01", "MV12", "NW01", "X501", "AC02", "IG01", "KB07", "G4A2", "UX01", "QR01", "VA01", "EH02", "C502", "GS01", "EP04", "TF01", "VQ01", "W202", "BD05", "NE06", "L2A4", "LB03", "HD01", "PH01", "RK01", "TN01", "ZO02", "LK02", "NN07", "TW01", "HM01", "LS02", "AR01", "BT10", "HU01", "I601", "JX02", "SE02", "X401", "KA05", "AB01", "G3A1", "SM01"]'
+s2_val = 'AA48AB01AC02AE01AL05AP01AR01AS01AT01AW01AX03AY06B5A1B6A2B7A1B9A1BA99BD05BF06BG05BJ06BK01BS16BT10BW07BX04C1A6C3A4C405C502C701C802CA18CB02CC02CD01CE40CJ01CL01CQ01CS01CT01CV03CW01CX04D1A3D2A5D701D802D904DA02DB05DD06DE03DF01DH03DJ01DK01DL01DM01DN02DP01DR01DY01E201E402E550E705EAA1EC03ED02EF01EH02EJ01EL02EM03EN02EP04ET01EW02F3A2F5A1F6A3F7A2F8A2F9A1FD01G1A2G3A1G4A2G5A2G6A1G7A3G8A2G9A1GA01GB02GE01GF15GG37GS01GU02GV01H1A1H2A3H5A2H7A1H902HA03HB04HC01HD01HE01HF02HG01HH01HJ04HK47HL03HM01HN01HR02HS01HT01HU01HV01HX03HY02I601IG01J903JA05JB91JC01JD04JE01JL01JS01JW01JX02JZ04K301K401K601K802K924KA05KB07KC19KD01KE04KG06KHA2KJ04KK02KL02KM02KP01KR02KS04KU02KV03KW01KX02L2A4L304L401L601L903LB03LD06LE03LF03LG01LH04LJ03LK01LL02LM01LN01LP07LR04LS02LT03LU01LV03LW02LY03LZ03M302M802M901MA10MB42ME7CMF17MG32MM03MQ02MV12MW03MZ13N305N401N602N701NA01NB10ND15NE06NF02NG05NH04NJ02NK22NL04NM02NN07NP02NR02NS01NU01NW01P2A1P601P901PA01PB01PC05PD01PE02PH01PN19PR10Q7A2QE02QM01QP03QR01QV01QW02QX01RB02RE01RK01RL02RM01RN01RP03RY01S106S302S401S701SA02SB01SC01SD01SE02SH02SJ02SK01SM01SP03SR02SS01ST02SZ04T902TA01TB02TC02TF01TG01TJ01TK01TM01TN01TR02TS02TW01TY01TZ01U101U703UA02UB02UD02UE02UG01UM02US01UX01UY03VA01VC05VH02VN14VO01VQ01VX01W202X401X501X607XB7EXQ01XW01YB02YK02YL02YZ02ZN01ZO02IY04YA02YJ02X101'
+a1 = parse_vdn(s1_val)
+a2 = parse_vdn(s2_val)
+j1 = json.dumps(a1)
+j2 = json.dumps(a2)
+print("a1 == a2?", a1 == a2)
+print("len a1, a2:", len(a1), len(a2))
+print("in a1 not a2:", set(a1) - set(a2))
+print("in a2 not a1:", set(a2) - set(a1))
+
+import duckdb
+con = duckdb.connect()
+df = pd.DataFrame({'s1': [j1], 's2': [j2]})
+con.register('df', df)
+res = con.execute('''
+    SELECT 
+        s1 IS NOT DISTINCT FROM s2 as is_match,
+        CAST(from_json(s1, '["VARCHAR"]') AS VARCHAR[]) as l1,
+        CAST(from_json(s2, '["VARCHAR"]') AS VARCHAR[]) as l2
+    FROM df
+''').df()
+l1 = res.loc[0, 'l1']
+l2 = res.loc[0, 'l2']
+import numpy as np
+rem = [x for x in l1 if not np.isin(x, l2)]
+add = [x for x in l2 if not np.isin(x, l1)]
+print("DuckDB match:", res.loc[0, 'is_match'])
+print("rem:", rem)
+print("add:", add)

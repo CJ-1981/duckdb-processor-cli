@@ -21,6 +21,8 @@
         "vin": "VIN",
         "DB_SW": "CONSUMER_SW_VERSION",
         "DB_targetVdns": "VDN_LIST",
-        "model": "MODEL"
-    }
+        "model": "MODEL",
+        "region": "REGION"
+    },
+    "skip_nodata": false
 }

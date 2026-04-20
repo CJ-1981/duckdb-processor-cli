@@ -1,23 +1,20 @@
 import os
 import sys
-import io
-import gc
-import time
 import argparse
 import duckdb
 import pandas as pd
 import json
 from datetime import datetime
 from pathlib import Path
+import tkinter as tk
+from tkinter import filedialog
 
-__version__ = "1.2.2"
-
-# Null-like string values produced by pandas/Excel that should be treated as missing data.
-# Centralised here so they're easy to extend without hunting through the codebase.
-_NULL_SENTINELS: dict = {'nan': None, 'NaN': None, 'None': None, 'none': None, 'N/A': None, '': None}
+__version__ = "1.2.0"
 
 # Windows UTF-8 re-configuration for correct box character rendering
 if os.name == 'nt':
+    import sys
+    import io
     # Force the console to use UTF-8
     os.system('chcp 65001 > nul 2>&1')
     if hasattr(sys.stdout, 'reconfigure'):
@@ -77,89 +74,6 @@ def load_file(file_path: str) -> pd.DataFrame:
         cprint(f"\n[bold red]ERROR LOADING FILE:[/bold red] {e}")
         sys.exit(1)
 
-def preprocess_df(
-    df: pd.DataFrame,
-    label: str,
-    *,
-    skip_filters: dict,
-    compare_model: bool,
-    compare_sw: bool,
-    custom_norms: dict,
-    normalize_models: list,
-    normalize_sw: list,
-) -> pd.DataFrame:
-    """Unified cleanup, filtering, and normalization for comparison targets.
-
-    Parameters are passed explicitly (no closure) so this function can be
-    unit-tested independently of ``main()``.
-    """
-    # 2a. Aggressive column/value cleanup
-    df.columns = [str(c).strip().replace('"', '') for c in df.columns]
-    for col in df.columns:
-        df[col] = df[col].astype(str).str.strip().str.replace(r'^"|"$', '', regex=True)
-        df[col] = df[col].replace(_NULL_SENTINELS)
-
-    # 2b. Apply Skip Filters (Exclude certain rows early)
-    if skip_filters:
-        for f_col, f_vals in skip_filters.items():
-            # Case-insensitive column matching
-            target_col = next((c for c in df.columns if c.lower() == f_col.lower()), None)
-            if target_col:
-                if not isinstance(f_vals, list):
-                    f_vals = [f_vals]
-                # Case-insensitive value matching
-                f_vals_set = set(str(v).strip().upper() for v in f_vals)
-                mask = df[target_col].astype(str).str.strip().str.upper().isin(f_vals_set)
-                skip_count = mask.sum()
-                if skip_count > 0:
-                    df = df[~mask].copy()
-                    cprint(f"[yellow]Filtered {skip_count} rows from {label} where '{target_col}' matched {f_vals_set}[/yellow]")
-
-    # 2c. Custom business logic normalization for Model comparison
-    if compare_model and 'MODEL' in df.columns:
-        df['MODEL_NORM'] = df['MODEL']
-        df['MODEL_DISPLAY'] = df['MODEL']
-        for group in normalize_models:
-            models = [m.strip() for m in group.split(',')]
-            if len(models) > 1:
-                primary = models[0]
-                for alias in models[1:]:
-                    df.loc[df['MODEL'] == alias, 'MODEL_NORM'] = primary
-                    df.loc[df['MODEL'] == alias, 'MODEL_DISPLAY'] = f"{primary}({alias})"
-
-    # 2d. Custom business logic normalization for SW comparison
-    if compare_sw and 'CONSUMER_SW_VERSION' in df.columns:
-        df['SW_NORM'] = df['CONSUMER_SW_VERSION']
-        df['SW_DISPLAY'] = df['CONSUMER_SW_VERSION']
-        if normalize_sw:
-            for group in normalize_sw:
-                versions = [v.strip() for v in group.split(',')]
-                if len(versions) > 1:
-                    primary = versions[0]
-                    for alias in versions[1:]:
-                        df.loc[df['CONSUMER_SW_VERSION'] == alias, 'SW_NORM'] = primary
-                        df.loc[df['CONSUMER_SW_VERSION'] == alias, 'SW_DISPLAY'] = f"{primary}({alias})"
-
-    # 2e. Generic Custom Normalization for any extra columns specified in config
-    if custom_norms:
-        for norm_col, groups in custom_norms.items():
-            if norm_col in df.columns:
-                col_norm = f"{norm_col}_NORM"
-                col_disp = f"{norm_col}_DISPLAY"
-                df[col_norm] = df[norm_col]
-                df[col_disp] = df[norm_col]
-                if isinstance(groups, str):
-                    groups = [groups]
-                for group in groups:
-                    items = [str(x).strip() for x in group.split(',')]
-                    if len(items) > 1:
-                        primary = items[0]
-                        for alias in items[1:]:
-                            df.loc[df[norm_col] == alias, col_norm] = primary
-                            df.loc[df[norm_col] == alias, col_disp] = f"{primary}({alias})"
-    return df
-
-
 def save_dataframe(df, file_path, fmt):
     """Helper to save a dataframe with error handling and directory creation."""
     path_obj = Path(file_path)
@@ -185,6 +99,8 @@ def save_dataframe(df, file_path, fmt):
         cprint("[yellow]Please ensure the file is NOT open in Excel or another program, then try again.[/yellow]")
 
 def main():
+    import time
+
     cprint(f"[bold cyan]VDN Compare[/bold cyan] [dim]v{__version__}[/dim]")
     
     parser = argparse.ArgumentParser(description="Compare Source 1 and Source 2 files.")
@@ -254,12 +170,6 @@ def main():
     manual_input = Path(args.source1) != Path("input/DB.csv") or Path(args.source2) != Path("input/PIE.csv")
     
     if not args.use_default_input and not manual_input:
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
-        except ImportError:
-            cprint("[bold red]ERROR: tkinter is not available. Use --use-default-input or --source1/--source2 to specify files.[/bold red]")
-            sys.exit(1)
         root = tk.Tk()
         root.withdraw()  # Hide the main tkinter window
         root.attributes('-topmost', True) # Bring dialog to front
@@ -360,18 +270,76 @@ def main():
         cprint(f"[bold red]CRITICAL ERROR: 'VIN' column not found in one or both files.[/bold red]")
         sys.exit(1)
 
-    # 2. Trim whitespaces/quotes, normalize null-like values, apply filters and normalization.
-    # preprocess_df is a module-level function; dependencies are passed explicitly.
-    _pp_kwargs = dict(
-        skip_filters=skip_filters,
-        compare_model=compare_model,
-        compare_sw=compare_sw,
-        custom_norms=custom_norms,
-        normalize_models=args.normalize_models,
-        normalize_sw=args.normalize_sw,
-    )
-    df_s1 = preprocess_df(df_s1, "Source 1", **_pp_kwargs)
-    df_s2 = preprocess_df(df_s2, "Source 2", **_pp_kwargs)
+    # 2. Trim whitespaces and quotes, and normalize null-like values
+    def preprocess_df(df, label):
+        """Unified cleanup, filtering, and normalization for comparison targets."""
+        # 2a. Aggressive column/value cleanup
+        df.columns = [str(c).strip().replace('"', '') for c in df.columns]
+        for col in df.columns:
+            df[col] = df[col].astype(str).str.strip().str.replace(r'^"|"$', '', regex=True)
+            df[col] = df[col].replace({'nan': None, 'NaN': None, 'None': None, '': None})
+        
+        # 2b. Apply Skip Filters (Exclude certain rows early)
+        if skip_filters:
+            for f_col, f_vals in skip_filters.items():
+                # Case-insensitive column matching
+                target_col = next((c for c in df.columns if c.lower() == f_col.lower()), None)
+                
+                if target_col:
+                    if not isinstance(f_vals, list): f_vals = [f_vals]
+                    # Case-insensitive value matching
+                    f_vals_set = set(str(v).strip().upper() for v in f_vals)
+                    mask = df[target_col].astype(str).str.strip().str.upper().isin(f_vals_set)
+                    skip_count = mask.sum()
+                    if skip_count > 0:
+                        df = df[~mask].copy()
+                        cprint(f"[yellow]Filtered {skip_count} rows from {label} where '{target_col}' matched {f_vals_set}[/yellow]")
+        
+        # 2c. Custom business logic normalization for Model comparison
+        if compare_model and 'MODEL' in df.columns:
+            df['MODEL_NORM'] = df['MODEL']
+            df['MODEL_DISPLAY'] = df['MODEL']
+            for group in args.normalize_models:
+                models = [m.strip() for m in group.split(',')]
+                if len(models) > 1:
+                    primary = models[0]
+                    for alias in models[1:]:
+                        df.loc[df['MODEL'] == alias, 'MODEL_NORM'] = primary
+                        df.loc[df['MODEL'] == alias, 'MODEL_DISPLAY'] = f"{primary}({alias})"
+
+        # 2d. Custom business logic normalization for SW comparison
+        if compare_sw and 'CONSUMER_SW_VERSION' in df.columns:
+            df['SW_NORM'] = df['CONSUMER_SW_VERSION']
+            df['SW_DISPLAY'] = df['CONSUMER_SW_VERSION']
+            if args.normalize_sw:
+                for group in args.normalize_sw:
+                    versions = [v.strip() for v in group.split(',')]
+                    if len(versions) > 1:
+                        primary = versions[0]
+                        for alias in versions[1:]:
+                            df.loc[df['CONSUMER_SW_VERSION'] == alias, 'SW_NORM'] = primary
+                            df.loc[df['CONSUMER_SW_VERSION'] == alias, 'SW_DISPLAY'] = f"{primary}({alias})"
+
+        # 2e. Generic Custom Normalization for any extra columns specified in config
+        if custom_norms:
+            for norm_col, groups in custom_norms.items():
+                if norm_col in df.columns:
+                    col_norm = f"{norm_col}_NORM"
+                    col_disp = f"{norm_col}_DISPLAY"
+                    df[col_norm] = df[norm_col]
+                    df[col_disp] = df[norm_col]
+                    if isinstance(groups, str): groups = [groups]
+                    for group in groups:
+                        items = [str(x).strip() for x in group.split(',')]
+                        if len(items) > 1:
+                            primary = items[0]
+                            for alias in items[1:]:
+                                df.loc[df[norm_col] == alias, col_norm] = primary
+                                df.loc[df[norm_col] == alias, col_disp] = f"{primary}({alias})"
+        return df
+
+    df_s1 = preprocess_df(df_s1, "Source 1")
+    df_s2 = preprocess_df(df_s2, "Source 2")
 
 
     # 3. Parse VDN_LIST smartly
@@ -394,10 +362,10 @@ def main():
         result = sorted(c for c in chunks if c.strip())
         return result if result else []
 
-    for df_label, df in [('Source 1', df_s1), ('Source 2', df_s2)]:
+    for df in (df_s1, df_s2):
         if compare_vdn and 'VDN_LIST' in df.columns:
             if has_tqdm:
-                cprint(f"[cyan]Parsing VDNs for {df_label}...[/cyan]")
+                cprint(f"[cyan]Parsing VDNs for {df.columns[0]}...[/cyan]")
                 df['VDN_LIST_CLEAN'] = df['VDN_LIST'].progress_apply(lambda x: json.dumps(parse_vdn(x)))
             else:
                 df['VDN_LIST_CLEAN'] = df['VDN_LIST'].apply(lambda x: json.dumps(parse_vdn(x)))
@@ -440,8 +408,7 @@ def main():
             conflicts = {p: v_list for p, v_list in prefixes.items() if len(v_list) > 1}
             if conflicts:
                 return ", ".join(f"{p}({'/'.join(v)})" for p, v in conflicts.items())
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
+        except: pass
         return None
 
     audit_results = {'s1': {}, 's2': {}}
@@ -592,28 +559,16 @@ def main():
         
     final_selects_str = ",\n        ".join(final_selects)
 
-    # NOTE: QUALIFY ROW_NUMBER() deduplicates per VIN before the join.
-    # Without this, duplicate VINs produce a cross-product (N*M rows per VIN pair),
-    # inflating all downstream mismatch counts and sample tables.
-    # The first occurrence in each source (by natural row order) is kept as canonical.
     compare_query = f"""
-    WITH s1_raw AS (
+    WITH s1_data AS (
         SELECT {s_selects_str}
         FROM s1_db
         WHERE VIN IS NOT NULL AND VIN != 'nan'
     ),
-    s1_data AS (
-        SELECT * FROM s1_raw
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY vin ORDER BY (SELECT NULL)) = 1
-    ),
-    s2_raw AS (
+    s2_data AS (
         SELECT {t_selects_str}
         FROM s2_db
         WHERE VIN IS NOT NULL AND VIN != 'nan'
-    ),
-    s2_data AS (
-        SELECT * FROM s2_raw
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY vin ORDER BY (SELECT NULL)) = 1
     ),
     joined AS (
         SELECT
@@ -629,6 +584,7 @@ def main():
     
     result_df = con.execute(compare_query).df()
     
+    import gc
     # Free up heavy dataframe hashes immediately
     del df_s1
     del df_s2
@@ -636,8 +592,6 @@ def main():
     gc.collect()
 
     # Advanced logic for Python-side extraction of VDN differences (Optimized)
-    # Initialize with a safe default to prevent NameError if compare_vdn is False
-    vdn_tally_df = pd.DataFrame()
     if compare_vdn:
         if has_tqdm:
             cprint("[cyan]Extracting VDN differences...[/cyan]")
@@ -704,8 +658,7 @@ def main():
             else:
                 vdn_tally_df = pd.DataFrame(summaries)
         
-        _drop_json_cols = [c for c in ['s1_vdns_json', 's2_json', 's2_vdns_json'] if c in result_df.columns]
-        final_output = result_df.drop(columns=_drop_json_cols)
+        final_output = result_df.drop(columns=['s1_vdns_json', 's2_json' if 's2_json' in result_df.columns else 's2_vdns_json'], errors='ignore')
     else:
         final_output = result_df
     
@@ -787,19 +740,14 @@ def main():
         f"Mismatches: {m_path.name}",
         f"Source 1 Dups: {len(audit_results['s1']['dup_vins'])} VINs",
         f"Source 2 Dups: {len(audit_results['s2']['dup_vins'])} VINs",
-    ]
-    if compare_vdn:
-        summary_lines_console.extend([
-            f"Source 1 VDN Prefix Conflicts: {len(audit_results['s1']['prefix_conflicts'])} VINs",
-            f"Source 2 VDN Prefix Conflicts: {len(audit_results['s2']['prefix_conflicts'])} VINs",
-        ])
-    summary_lines_console.extend([
+        f"Source 1 VDN Prefix Conflicts: {len(audit_results['s1']['prefix_conflicts'])} VINs",
+        f"Source 2 VDN Prefix Conflicts: {len(audit_results['s2']['prefix_conflicts'])} VINs",
         "\nCOMPARISON RESULTS",
         "="*80,
         f"Total Unique VINs Analyzed: {u_total} (Source 1: {u_s1}, Source 2: {u_s2})",
         f"Unique VINs found only in Source 1: {u_only_s1}",
         f"Unique VINs found only in Source 2: {u_only_s2}"
-    ])
+    ]
     for col in existing_targets:
         md = mismatched_data[col]
         label = md['label']
@@ -878,20 +826,15 @@ def main():
             cprint(df.to_string(index=False))
 
     # 1. SW Version Matrix & Detailed List (Console)
-    # Pre-compute the cross-tab once; reused by both console and file output sections
-    sw_matrix_df = (
-        pd.crosstab(mismatched_sw['s1_sw'], mismatched_sw['s2_sw'], margins=True, margins_name='TOTAL')
-        if compare_sw and not mismatched_sw.empty else None
-    )
-
-    if sw_matrix_df is not None:
+    if compare_sw and not mismatched_sw.empty:
         header_text = "SW VERSION MISMATCH MATRIX (Source 1 vs Source 2)"
         cprint(f"\n[bold magenta]{header_text}:[/bold magenta]")
+        matrix_df = pd.crosstab(mismatched_sw['s1_sw'], mismatched_sw['s2_sw'], margins=True, margins_name='TOTAL')
         
         # Matrix View
         if has_rich:
             console = Console(force_terminal=True)
-            matrix_df_reset = sw_matrix_df.reset_index().rename(columns={'s1_sw': 'Source 1 SW(row)\\Source 2 SW(col)'})
+            matrix_df_reset = matrix_df.reset_index().rename(columns={'s1_sw': 'Source 1 SW(row)\\Source 2 SW(col)'})
             table_box = box.ASCII if os.name == 'nt' and args.pager else box.SQUARE
             table = Table(show_header=True, header_style="bold magenta", show_lines=True, box=table_box)
             for i, col in enumerate(matrix_df_reset.columns): 
@@ -901,7 +844,7 @@ def main():
                 with console.pager(styles=True): console.print(table)
             else: console.print(table)
         else:
-            cprint(sw_matrix_df.to_string())
+            cprint(matrix_df.to_string())
 
         # Detailed Tally View
         sw_counts = mismatched_sw.groupby(['s1_sw', 's2_sw']).size().reset_index(name='Count')
@@ -1086,13 +1029,8 @@ def main():
                 f"- **Source 2 File**: `{Path(args.source2).name}`" if is_md else f"<li>Source 2 File: {Path(args.source2).name}</li>",
                 f"- **Source 1 Duplicates**: {len(audit_results['s1']['dup_vins'])} unique VINs" if is_md else f"<li>Source 1 Duplicates: {len(audit_results['s1']['dup_vins'])} unique VINs</li>",
                 f"- **Source 2 Duplicates**: {len(audit_results['s2']['dup_vins'])} unique VINs" if is_md else f"<li>Source 2 Duplicates: {len(audit_results['s2']['dup_vins'])} unique VINs</li>",
-            ])
-            if compare_vdn:
-                summary_lines.extend([
-                    f"- **Source 1 VDN Prefix Conflicts**: {len(audit_results['s1']['prefix_conflicts'])} unique VINs" if is_md else f"<li>Source 1 VDN Prefix Conflicts: {len(audit_results['s1']['prefix_conflicts'])} unique VINs</li>",
-                    f"- **Source 2 VDN Prefix Conflicts**: {len(audit_results['s2']['prefix_conflicts'])} unique VINs" if is_md else f"<li>Source 2 VDN Prefix Conflicts: {len(audit_results['s2']['prefix_conflicts'])} unique VINs</li>",
-                ])
-            summary_lines.extend([
+                f"- **Source 1 VDN Prefix Conflicts**: {len(audit_results['s1']['prefix_conflicts'])} unique VINs" if is_md else f"<li>Source 1 VDN Prefix Conflicts: {len(audit_results['s1']['prefix_conflicts'])} unique VINs</li>",
+                f"- **Source 2 VDN Prefix Conflicts**: {len(audit_results['s2']['prefix_conflicts'])} unique VINs" if is_md else f"<li>Source 2 VDN Prefix Conflicts: {len(audit_results['s2']['prefix_conflicts'])} unique VINs</li>",
                 f"- **Source 1 Incomplete Data**: {audit_results['s1']['u_empty_vins']} unique VINs" if is_md else f"<li>Source 1 Incomplete Data: {audit_results['s1']['u_empty_vins']} unique VINs</li>",
                 f"- **Source 2 Incomplete Data**: {audit_results['s2']['u_empty_vins']} unique VINs" if is_md else f"<li>Source 2 Incomplete Data: {audit_results['s2']['u_empty_vins']} unique VINs</li>",
             ])
@@ -1185,16 +1123,11 @@ def main():
                 f"Mismatches: {m_path.name}",
                 f"Source 1 Dups: {len(audit_results['s1']['dup_vins'])} VINs",
                 f"Source 2 Dups: {len(audit_results['s2']['dup_vins'])} VINs",
-            ]
-            if compare_vdn:
-                summary_lines.extend([
-                    f"Source 1 VDN Conflicts: {len(audit_results['s1']['prefix_conflicts'])} VINs",
-                    f"Source 2 VDN Conflicts: {len(audit_results['s2']['prefix_conflicts'])} VINs",
-                ])
-            summary_lines.extend([
+                f"Source 1 VDN Conflicts: {len(audit_results['s1']['prefix_conflicts'])} VINs",
+                f"Source 2 VDN Conflicts: {len(audit_results['s2']['prefix_conflicts'])} VINs",
                 f"Source 1 Incomplete: {audit_results['s1']['u_empty_vins']} VINs",
                 f"Source 2 Incomplete: {audit_results['s2']['u_empty_vins']} VINs",
-            ])
+            ]
             if args.skip_nodata:
                 summary_lines.extend([
                     f"Source 1 Skipped (No-Data): {skipped_nodata['s1']} VINs",
@@ -1224,13 +1157,13 @@ def main():
             
             # A. Special handling for SW Matrix
             if col == 'CONSUMER_SW_VERSION':
-                # Reuse the pre-computed crosstab (avoids redundant computation)
+                matrix_df = pd.crosstab(md['df']['s1_sw'], md['df']['s2_sw'], margins=True, margins_name='TOTAL')
                 header_text = "SW VERSION MISMATCH MATRIX (Source 1 vs Source 2)"
                 anchor_id = "sw-mismatch-matrix"
                 if is_md or is_html:
                     sub_prefix = f"## {header_text}" if is_md else f"<h2 id=\"{anchor_id}\">{header_text}</h2>"
                     summary_lines.append(f"\n{sub_prefix}\n")
-                    disp_matrix = sw_matrix_df.map(lambda x: f'<span class="mismatch" style="color:red">{x}</span>' if str(x).isdigit() and int(x) > 0 else str(x))
+                    disp_matrix = matrix_df.map(lambda x: f'<span class="mismatch" style="color:red">{x}</span>' if str(x).isdigit() and int(x) > 0 else str(x))
                     matrix_styled = disp_matrix.reset_index().rename(columns={'s1_sw': 'Source 1 SW(row)\\Source 2 SW(col)'})
                     matrix_styled.columns.name = None
                     if is_md: summary_lines.append(matrix_styled.to_markdown(index=False))
@@ -1238,7 +1171,7 @@ def main():
                 elif fmt == 'rich' and has_rich:
                     from io import StringIO
                     capture_console = Console(file=StringIO(), force_terminal=False, width=250)
-                    matrix_df_reset = sw_matrix_df.reset_index().rename(columns={'s1_sw': 'Source 1 SW(row)\\Source 2 SW(col)'})
+                    matrix_df_reset = matrix_df.reset_index().rename(columns={'s1_sw': 'Source 1 SW(row)\\Source 2 SW(col)'})
                     table = Table(show_header=True, header_style="bold magenta", show_lines=True, box=box.ASCII)
                     for i, c_name in enumerate(matrix_df_reset.columns): table.add_column(str(c_name), overflow="fold", style="bold magenta" if i == 0 else None)
                     for _, row in matrix_df_reset.iterrows(): table.add_row(*[f"[bold red]{val}[/bold red]" if str(val).isdigit() and int(val) > 0 else str(val) for val in row.values])
