@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-__version__ = "1.2.2"
+__version__ = "1.2.3"
 
 # Null-like string values produced by pandas/Excel that should be treated as missing data.
 # Centralised here so they're easy to extend without hunting through the codebase.
@@ -639,49 +639,51 @@ def main():
     # Initialize with a safe default to prevent NameError if compare_vdn is False
     vdn_tally_df = pd.DataFrame()
     if compare_vdn:
-        if has_tqdm:
-            cprint("[cyan]Extracting VDN differences...[/cyan]")
-            
         vdn_diff_pairs = []
-        def compute_diff(row):
-            s_vdns_str = row.get('s1_vdns_json')
-            t_vdns_str = row.get('s2_vdns_json')
-            
-            s_vdns = set(json.loads(s_vdns_str)) if pd.notna(s_vdns_str) and s_vdns_str else set()
-            t_vdns = set(json.loads(t_vdns_str)) if pd.notna(t_vdns_str) and t_vdns_str else set()
-            
-            only_in_t = t_vdns - s_vdns
-            only_in_s = s_vdns - t_vdns
-            
-            added = ", ".join(sorted(only_in_t)) if only_in_t else ""
-            removed = ", ".join(sorted(only_in_s)) if only_in_s else ""
-            
-            # Detailed Tally logic (only for true discrepancies where VIN exists in both)
-            if row['vdn_match'] == 'MISMATCH' and row['VIN_in_s1'] == 1 and row['VIN_in_s2'] == 1:
-                s_groups = {}
-                for v in only_in_s: s_groups.setdefault(v[:2], []).append(v)
-                t_groups = {}
-                for v in only_in_t: t_groups.setdefault(v[:2], []).append(v)
+        result_df['Only in S1'] = ""
+        result_df['Only in S2'] = ""
+        
+        # Compute VDN strings for data fullness across ALL mismatches (including missing VINs)
+        mismatch_mask = (result_df['vdn_match'] == 'MISMATCH')
+        mismatch_indices = result_df.index[mismatch_mask]
+        
+        if not mismatch_indices.empty:
+            if has_tqdm:
+                cprint("[cyan]Extracting VDN differences...[/cyan]")
                 
-                all_prefixes = set(s_groups.keys()) | set(t_groups.keys())
-                for pref in sorted(all_prefixes):
+            def _parse_vdn_json(val):
+                return set(json.loads(val)) if isinstance(val, str) and val else set()
+                
+            mismatched_s1 = result_df.loc[mismatch_indices, 's1_vdns_json']
+            mismatched_s2 = result_df.loc[mismatch_indices, 's2_vdns_json']
+            
+            s_sets = mismatched_s1.apply(_parse_vdn_json)
+            t_sets = mismatched_s2.apply(_parse_vdn_json)
+
+            only_in_t = [t - s for s, t in zip(s_sets, t_sets)]
+            only_in_s = [s - t for s, t in zip(s_sets, t_sets)]
+            
+            result_df.loc[mismatch_indices, 'Only in S1'] = [", ".join(sorted(x)) if x else "" for x in only_in_s]
+            result_df.loc[mismatch_indices, 'Only in S2'] = [", ".join(sorted(x)) if x else "" for x in only_in_t]
+            
+            # Compute detailed tallies ONLY for true discrepancies where VIN exists in both
+            for idx, vin, s_diff, t_diff in zip(mismatch_indices, result_df.loc[mismatch_indices, 'vin'], only_in_s, only_in_t):
+                if result_df.at[idx, 'VIN_in_s1'] == 0 or result_df.at[idx, 'VIN_in_s2'] == 0:
+                    continue
+                
+                s_groups = {}
+                for v in s_diff: s_groups.setdefault(v[:2], []).append(v)
+                t_groups = {}
+                for v in t_diff: t_groups.setdefault(v[:2], []).append(v)
+                
+                all_prefixes = sorted(set(s_groups.keys()) | set(t_groups.keys()))
+                for pref in all_prefixes:
                     s_list = sorted(s_groups.get(pref, []))
                     t_list = sorted(t_groups.get(pref, []))
                     for i in range(max(len(s_list), len(t_list))):
                         sv = s_list[i] if i < len(s_list) else "No Match"
                         tv = t_list[i] if i < len(t_list) else "No Match"
-                        vdn_diff_pairs.append((row['vin'], sv, tv))
-
-            return added, removed
-
-        if has_tqdm:
-            tqdm.pandas(desc="Computing Diffs")
-            diffs = result_df.progress_apply(compute_diff, axis=1)
-        else:
-            diffs = result_df.apply(compute_diff, axis=1)
-
-        result_df['Only in S1'] = diffs.map(lambda x: x[1])
-        result_df['Only in S2'] = diffs.map(lambda x: x[0])
+                        vdn_diff_pairs.append((vin, sv, tv))
         
         # Create VDN Tally DataFrame
         vdn_tally_df = pd.DataFrame(vdn_diff_pairs, columns=['VIN', 'VDN in S1', 'VDN in S2'])

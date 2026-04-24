@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-__version__ = "1.2.6"
+__version__ = "1.2.5"
 
 # Null-like string values produced by pandas/Excel that should be treated as missing data.
 # Centralised here so they're easy to extend without hunting through the codebase.
@@ -96,19 +96,7 @@ def preprocess_df(
     unit-tested independently of ``main()``.
     """
     # 2a. Aggressive column/value cleanup
-    # Clean column names and ENSURE uniqueness to prevent AttributeError when accessing df[col] later
-    cleaned_names = [str(c).strip().replace('"', '') for c in df.columns]
-    final_names = []
-    seen = {}
-    for name in cleaned_names:
-        if name in seen:
-            seen[name] += 1
-            final_names.append(f"{name}_{seen[name]}")
-        else:
-            seen[name] = 0
-            final_names.append(name)
-    df.columns = final_names
-
+    df.columns = [str(c).strip().replace('"', '') for c in df.columns]
     for col in df.columns:
         df[col] = df[col].astype(str).str.strip().str.replace(r'^"|"$', '', regex=True)
         df[col] = df[col].replace(_NULL_SENTINELS)

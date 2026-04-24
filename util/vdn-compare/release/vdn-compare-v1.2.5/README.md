@@ -60,15 +60,8 @@ Example `config.json`:
 
 ## Quick Start
 
-### 1. Graphical User Interface (Recommended)
-The easiest way to use the tool is via the GUI, which allows you to visually map columns and manage settings without editing JSON files.
-Run the GUI script (or the bundled `.exe`):
-```bash
-python vdn_compare_gui.py
-```
-
-### 2. Simple CLI Usage (File Dialog)
-If you prefer the command line but still want to select files visually:
+### 1. Simple Usage (File Dialog)
+Run the script to open a window and select your files:
 ```bash
 python vdn_compare.py
 ```
@@ -79,29 +72,11 @@ Group release candidates with final versions and align model names:
 python vdn_compare.py -s1 source1.csv -s2 source2.xlsx --normalize-sw "1.7.0,1.7.0.RC1" --normalize-models "EX30,V216"
 ```
 
-### 4. Multi-Format Audit
+### 3. Multi-Format Audit
 Generate browser-friendly HTML reports and terminal summaries with all audit entries:
 ```bash
 python vdn_compare.py --format html rich --samples all
 ```
-
-## Graphical User Interface (GUI)
-
-The VDN Compare GUI provides a professional, tabbed interface for managing complex comparisons.
-
-### Run Settings Tab
-- **File Selection**: Browse and select Source 1 and Source 2 files (CSV or Excel).
-- **Configuration Persistence**: Save and load all settings to `config.json` with a single click.
-- **Reporting Options**: Choose multiple output formats (HTML, MD, CSV, RICH) via checkboxes.
-- **Advanced Filtering**: Configure VIN sorting, sample counts, and data integrity audits (Skip NoData).
-- **Console Output**: Real-time progress and summary display directly within the window.
-
-### Column Settings Tab
-- **Dynamic Header Loading**: Headers are automatically loaded from your selected files.
-- **Visual Mapping**: Map file-specific column names to internal roles (VIN, SW, VDN, Model, Region).
-- **Custom Roles**: Add arbitrary columns to the comparison engine on the fly.
-- **Selection Toggles**: Use checkboxes to choose exactly which mapped columns should be compared.
-- **Automatic Sync**: Mappings are automatically saved and passed to the comparison engine when you click "Run".
 
 ## Argument Options
 

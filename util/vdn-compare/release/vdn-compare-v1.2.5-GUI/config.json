@@ -22,7 +22,8 @@
         "vin": "VIN",
         "DB_SW": "CONSUMER_SW_VERSION",
         "DB_targetVdns": "VDN_LIST",
-        "model": "MODEL"
+        "model": "MODEL",
+        "region": "REGION"
     },
     "s2_map": {
         "VIN": "VIN",

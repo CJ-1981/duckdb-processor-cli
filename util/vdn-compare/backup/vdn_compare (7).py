@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-__version__ = "1.2.6"
+__version__ = "1.2.2"
 
 # Null-like string values produced by pandas/Excel that should be treated as missing data.
 # Centralised here so they're easy to extend without hunting through the codebase.
@@ -72,11 +72,9 @@ def load_file(file_path: str) -> pd.DataFrame:
     except PermissionError:
         cprint(f"\n[bold red]PERMISSION DENIED:[/bold red] Could not access [bold white]{Path(file_path).name}[/bold white]")
         cprint("[yellow]Please make sure the file is CLOSED in Excel or other programs and try again.[/yellow]")
-        input("\nPress Enter to exit...")
         sys.exit(1)
     except Exception as e:
         cprint(f"\n[bold red]ERROR LOADING FILE:[/bold red] {e}")
-        input("\nPress Enter to exit...")
         sys.exit(1)
 
 def preprocess_df(
@@ -96,19 +94,7 @@ def preprocess_df(
     unit-tested independently of ``main()``.
     """
     # 2a. Aggressive column/value cleanup
-    # Clean column names and ENSURE uniqueness to prevent AttributeError when accessing df[col] later
-    cleaned_names = [str(c).strip().replace('"', '') for c in df.columns]
-    final_names = []
-    seen = {}
-    for name in cleaned_names:
-        if name in seen:
-            seen[name] += 1
-            final_names.append(f"{name}_{seen[name]}")
-        else:
-            seen[name] = 0
-            final_names.append(name)
-    df.columns = final_names
-
+    df.columns = [str(c).strip().replace('"', '') for c in df.columns]
     for col in df.columns:
         df[col] = df[col].astype(str).str.strip().str.replace(r'^"|"$', '', regex=True)
         df[col] = df[col].replace(_NULL_SENTINELS)
@@ -209,7 +195,7 @@ def main():
     parser.add_argument('--samples', default='10', help="Number of samples to show in summary (integer or 'all', default: 10)")
     parser.add_argument('--pager', action='store_true', help="Use a pager to display long console tables")
     parser.add_argument('--use-default-input', action='store_true', help="Load default DB.csv and PIE.csv from /input without file select GUI dialog")
-    parser.add_argument('--compare', nargs='+', default=['all'], help='List of columns to compare. Options: sw, vdn, model, region, vin, or "all" to compare all mapped columns.')
+    parser.add_argument('--compare', nargs='+', default=['sw', 'vdn', 'model'], help='List of columns to compare. Options: sw, vdn, model, vin.')
     parser.add_argument('--normalize-models', nargs='+', default=['EX30,V216', 'EX30 CC,V216-CC'], help='Groups of equivalent models, comma-separated (e.g. "EX30,V216" "PS4,P417")')
     parser.add_argument('--normalize-sw', nargs='+', default=['MY27 J1,27 J1'], help='Groups of equivalent SW versions, comma-separated (e.g. "MY27 J1,27 J1" "1.8.0,1.8.0-hotfix")')
     parser.add_argument('--normalize-custom', default="{}", help='Custom normalization rules in JSON format mapping column names to lists of equivalent groups. Best configured via config.json.')
@@ -273,7 +259,6 @@ def main():
             from tkinter import filedialog
         except ImportError:
             cprint("[bold red]ERROR: tkinter is not available. Use --use-default-input or --source1/--source2 to specify files.[/bold red]")
-            input("\nPress Enter to exit...")
             sys.exit(1)
         root = tk.Tk()
         root.withdraw()  # Hide the main tkinter window
@@ -319,30 +304,22 @@ def main():
         "region": "REGION"
     }
 
-    # Load custom mapping (Merge all sources while prioritizing config order)
+    # Load custom mapping (Merge all sources into a unified pool for order-independence)
     shared_map = config_data.get('column_map', {})
     s1_map = config_data.get('s1_map', config_data.get('source_map', {}))
     s2_map = config_data.get('s2_map', config_data.get('target_map', {}))
     
-    # Build merged map: items from config first to preserve their order
-    merged_map = {}
-    for m in [shared_map, s1_map, s2_map]:
-        merged_map.update(m)
-    # Add defaults that were not overriden
-    for k, v in common_map.items():
-        if k not in merged_map:
-            merged_map[k] = v
-            
-    common_map = merged_map
+    common_map.update(shared_map)
+    common_map.update(s1_map)
+    common_map.update(s2_map)
     
     # We apply the same map to both: order protection
     df_s1.rename(columns=common_map, inplace=True)
     df_s2.rename(columns=common_map, inplace=True)
 
     # 1. Identify Comparison Targets
-    # All columns effectively renamed to something that isn't VIN are potential targets.
-    # Use dict.fromkeys to get unique values while preserving the insertion order from common_map.
-    s_cols = [c for c in dict.fromkeys(common_map.values()) if c != 'VIN']
+    # All columns effectively renamed to something that isn't VIN are potential targets
+    s_cols = [c for c in set(common_map.values()) if c != 'VIN']
     
     # Check what actually exists in both dataframes
     all_existing = [c for c in s_cols if c in df_s1.columns and c in df_s2.columns]
@@ -352,24 +329,21 @@ def main():
     reserved_map = {'sw': 'CONSUMER_SW_VERSION', 'vdn': 'VDN_LIST', 'model': 'MODEL'}
     
     requested_names = []
-    if 'all' in [f.lower() for f in comp_flags]:
-        requested_names = s_cols
-    else:
-        for flag in comp_flags:
-            flag_l = flag.lower()
-            if flag_l in reserved_map:
-                requested_names.append(reserved_map[flag_l])
+    for flag in comp_flags:
+        flag_l = flag.lower()
+        if flag_l in reserved_map:
+            requested_names.append(reserved_map[flag_l])
+        else:
+            # Check if flags matches an internal column name directly 
+            # OR matches a Source 1 header that was mapped to that column
+            target_name = None
+            if flag_l.upper() in [c.upper() for c in s_cols]:
+                 target_name = next(c for c in s_cols if c.upper() == flag_l.upper())
             else:
-                # Check if flags matches an internal column name directly 
-                # OR matches a Source 1 header that was mapped to that column
-                target_name = None
-                if flag_l.upper() in [c.upper() for c in s_cols]:
-                     target_name = next(c for c in s_cols if c.upper() == flag_l.upper())
-                else:
-                     target_name = next((v for k, v in common_map.items() if k.lower() == flag_l), None)
-                
-                if target_name:
-                    requested_names.append(target_name)
+                 target_name = next((v for k, v in common_map.items() if k.lower() == flag_l), None)
+            
+            if target_name:
+                requested_names.append(target_name)
     
     # Ensure existing_targets follows the specific order requested by the user/default flags
     existing_targets = [c for c in requested_names if c in all_existing]
@@ -384,7 +358,6 @@ def main():
     
     if 'VIN' not in df_s1.columns or 'VIN' not in df_s2.columns:
         cprint(f"[bold red]CRITICAL ERROR: 'VIN' column not found in one or both files.[/bold red]")
-        input("\nPress Enter to exit...")
         sys.exit(1)
 
     # 2. Trim whitespaces/quotes, normalize null-like values, apply filters and normalization.
@@ -411,14 +384,14 @@ def main():
             try:
                 parsed = json.loads(val_str.replace("'", '"'))
                 if isinstance(parsed, list):
-                    result = sorted(set(str(v).strip() for v in parsed if str(v).strip()))
+                    result = sorted(str(v).strip() for v in parsed if str(v).strip())
                     return result if result else []
             except Exception:
                 pass
                 
         # If not, assume it's concatenated 4-char chunks
         chunks = [val_str[i:i+4] for i in range(0, len(val_str), 4)]
-        result = sorted(set(c for c in chunks if c.strip()))
+        result = sorted(c for c in chunks if c.strip())
         return result if result else []
 
     for df_label, df in [('Source 1', df_s1), ('Source 2', df_s2)]:
@@ -666,57 +639,49 @@ def main():
     # Initialize with a safe default to prevent NameError if compare_vdn is False
     vdn_tally_df = pd.DataFrame()
     if compare_vdn:
+        if has_tqdm:
+            cprint("[cyan]Extracting VDN differences...[/cyan]")
+            
         vdn_diff_pairs = []
-        result_df['Only in S1'] = ""
-        result_df['Only in S2'] = ""
-        
-        # Compute VDN strings for data fullness across ALL mismatches (including missing VINs)
-        mismatch_mask = (result_df['vdn_match'] == 'MISMATCH')
-        mismatch_indices = result_df.index[mismatch_mask]
-        
-        if not mismatch_indices.empty:
-            if has_tqdm:
-                cprint("[cyan]Extracting VDN differences...[/cyan]")
-                
-            def _parse_vdn_json(val):
-                return set(json.loads(val)) if isinstance(val, str) and val else set()
-                
-            mismatched_s1 = result_df.loc[mismatch_indices, 's1_vdns_json']
-            mismatched_s2 = result_df.loc[mismatch_indices, 's2_vdns_json']
+        def compute_diff(row):
+            s_vdns_str = row.get('s1_vdns_json')
+            t_vdns_str = row.get('s2_vdns_json')
             
-            s_sets = mismatched_s1.apply(_parse_vdn_json)
-            t_sets = mismatched_s2.apply(_parse_vdn_json)
-
-            only_in_t = [t - s for s, t in zip(s_sets, t_sets)]
-            only_in_s = [s - t for s, t in zip(s_sets, t_sets)]
+            s_vdns = set(json.loads(s_vdns_str)) if pd.notna(s_vdns_str) and s_vdns_str else set()
+            t_vdns = set(json.loads(t_vdns_str)) if pd.notna(t_vdns_str) and t_vdns_str else set()
             
-            result_df.loc[mismatch_indices, 'Only in S1'] = [
-                'NO DATA' if len(s) == 0 else (", ".join(sorted(x)) if x else "")
-                for s, x in zip(s_sets, only_in_s)
-            ]
-            result_df.loc[mismatch_indices, 'Only in S2'] = [
-                'NO DATA' if len(t) == 0 else (", ".join(sorted(x)) if x else "")
-                for t, x in zip(t_sets, only_in_t)
-            ]
+            only_in_t = t_vdns - s_vdns
+            only_in_s = s_vdns - t_vdns
             
-            # Compute detailed tallies ONLY for true discrepancies where VIN exists in both
-            for idx, vin, s_diff, t_diff in zip(mismatch_indices, result_df.loc[mismatch_indices, 'vin'], only_in_s, only_in_t):
-                if result_df.at[idx, 'VIN_in_s1'] == 0 or result_df.at[idx, 'VIN_in_s2'] == 0:
-                    continue
-                
+            added = ", ".join(sorted(only_in_t)) if only_in_t else ""
+            removed = ", ".join(sorted(only_in_s)) if only_in_s else ""
+            
+            # Detailed Tally logic (only for true discrepancies where VIN exists in both)
+            if row['vdn_match'] == 'MISMATCH' and row['VIN_in_s1'] == 1 and row['VIN_in_s2'] == 1:
                 s_groups = {}
-                for v in s_diff: s_groups.setdefault(v[:2], []).append(v)
+                for v in only_in_s: s_groups.setdefault(v[:2], []).append(v)
                 t_groups = {}
-                for v in t_diff: t_groups.setdefault(v[:2], []).append(v)
+                for v in only_in_t: t_groups.setdefault(v[:2], []).append(v)
                 
-                all_prefixes = sorted(set(s_groups.keys()) | set(t_groups.keys()))
-                for pref in all_prefixes:
+                all_prefixes = set(s_groups.keys()) | set(t_groups.keys())
+                for pref in sorted(all_prefixes):
                     s_list = sorted(s_groups.get(pref, []))
                     t_list = sorted(t_groups.get(pref, []))
                     for i in range(max(len(s_list), len(t_list))):
                         sv = s_list[i] if i < len(s_list) else "No Match"
                         tv = t_list[i] if i < len(t_list) else "No Match"
-                        vdn_diff_pairs.append((vin, sv, tv))
+                        vdn_diff_pairs.append((row['vin'], sv, tv))
+
+            return added, removed
+
+        if has_tqdm:
+            tqdm.pandas(desc="Computing Diffs")
+            diffs = result_df.progress_apply(compute_diff, axis=1)
+        else:
+            diffs = result_df.apply(compute_diff, axis=1)
+
+        result_df['Only in S1'] = diffs.map(lambda x: x[1])
+        result_df['Only in S2'] = diffs.map(lambda x: x[0])
         
         # Create VDN Tally DataFrame
         vdn_tally_df = pd.DataFrame(vdn_diff_pairs, columns=['VIN', 'VDN in S1', 'VDN in S2'])
@@ -753,8 +718,7 @@ def main():
     column_meta = {
         'CONSUMER_SW_VERSION': {'label': 'SW', 'match': 'sw_match', 's': 's1_sw', 't': 's2_sw'},
         'MODEL': {'label': 'Model', 'match': 'model_match', 's': 's1_model', 't': 's2_model'},
-        'VDN_LIST': {'label': 'VDN', 'match': 'vdn_match', 's': 'Only in S1', 't': 'Only in S2'},
-        'REGION': {'label': 'Region', 'match': 'region_match', 's': 's1_region', 't': 's2_region'}
+        'VDN_LIST': {'label': 'VDN', 'match': 'vdn_match', 's': 'Only in S1', 't': 'Only in S2'}
     }
     
     mismatched_data = {}

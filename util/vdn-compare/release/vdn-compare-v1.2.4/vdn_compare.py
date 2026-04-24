@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-__version__ = "1.2.6"
+__version__ = "1.2.4"
 
 # Null-like string values produced by pandas/Excel that should be treated as missing data.
 # Centralised here so they're easy to extend without hunting through the codebase.
@@ -96,19 +96,7 @@ def preprocess_df(
     unit-tested independently of ``main()``.
     """
     # 2a. Aggressive column/value cleanup
-    # Clean column names and ENSURE uniqueness to prevent AttributeError when accessing df[col] later
-    cleaned_names = [str(c).strip().replace('"', '') for c in df.columns]
-    final_names = []
-    seen = {}
-    for name in cleaned_names:
-        if name in seen:
-            seen[name] += 1
-            final_names.append(f"{name}_{seen[name]}")
-        else:
-            seen[name] = 0
-            final_names.append(name)
-    df.columns = final_names
-
+    df.columns = [str(c).strip().replace('"', '') for c in df.columns]
     for col in df.columns:
         df[col] = df[col].astype(str).str.strip().str.replace(r'^"|"$', '', regex=True)
         df[col] = df[col].replace(_NULL_SENTINELS)
@@ -411,14 +399,14 @@ def main():
             try:
                 parsed = json.loads(val_str.replace("'", '"'))
                 if isinstance(parsed, list):
-                    result = sorted(set(str(v).strip() for v in parsed if str(v).strip()))
+                    result = sorted(str(v).strip() for v in parsed if str(v).strip())
                     return result if result else []
             except Exception:
                 pass
                 
         # If not, assume it's concatenated 4-char chunks
         chunks = [val_str[i:i+4] for i in range(0, len(val_str), 4)]
-        result = sorted(set(c for c in chunks if c.strip()))
+        result = sorted(c for c in chunks if c.strip())
         return result if result else []
 
     for df_label, df in [('Source 1', df_s1), ('Source 2', df_s2)]:
@@ -690,14 +678,8 @@ def main():
             only_in_t = [t - s for s, t in zip(s_sets, t_sets)]
             only_in_s = [s - t for s, t in zip(s_sets, t_sets)]
             
-            result_df.loc[mismatch_indices, 'Only in S1'] = [
-                'NO DATA' if len(s) == 0 else (", ".join(sorted(x)) if x else "")
-                for s, x in zip(s_sets, only_in_s)
-            ]
-            result_df.loc[mismatch_indices, 'Only in S2'] = [
-                'NO DATA' if len(t) == 0 else (", ".join(sorted(x)) if x else "")
-                for t, x in zip(t_sets, only_in_t)
-            ]
+            result_df.loc[mismatch_indices, 'Only in S1'] = [", ".join(sorted(x)) if x else "" for x in only_in_s]
+            result_df.loc[mismatch_indices, 'Only in S2'] = [", ".join(sorted(x)) if x else "" for x in only_in_t]
             
             # Compute detailed tallies ONLY for true discrepancies where VIN exists in both
             for idx, vin, s_diff, t_diff in zip(mismatch_indices, result_df.loc[mismatch_indices, 'vin'], only_in_s, only_in_t):

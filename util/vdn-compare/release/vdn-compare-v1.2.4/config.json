@@ -1,9 +1,6 @@
 {
     "compare": [
-        "sw",
-        "vdn",
-        "model",
-        "region"
+        "all"
     ],
     "normalize_models": [
         "EX30,V216",
@@ -17,19 +14,13 @@
     ],
     "samples": "10",
     "sort_vin": "asc",
-    "use_default_input": true,
-    "s1_map": {
+    "use_default_input": false,
+    "column_map": {
         "vin": "VIN",
         "DB_SW": "CONSUMER_SW_VERSION",
         "DB_targetVdns": "VDN_LIST",
-        "model": "MODEL"
-    },
-    "s2_map": {
-        "VIN": "VIN",
-        "CONSUMER_SW_VERSION": "CONSUMER_SW_VERSION",
-        "VDN_LIST": "VDN_LIST",
-        "MODEL": "MODEL",
-        "REGION": "REGION"
+        "model": "MODEL",
+        "region": "REGION"
     },
     "skip_nodata": false
 }
