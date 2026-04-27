@@ -119,6 +119,11 @@ logs/
 *_backup_*/
 
 # ===========================================
+# Releases
+# ===========================================
+release/
+
+# ===========================================
 # Secrets and Credentials (CRITICAL)
 # ===========================================
 # Environment files
@@ -215,17 +220,18 @@ duckdb_output_*.json
 duckdb_output_*.xlsx
 duckdb_output_*.parquet
 test_output.*
+test*.py
 .gradio_session.json
 duck_report_*.md
 duck_report_*.pdf
 output/vdn_comparison_results_20260410_134714.csv
-util/vdn-compare/release/vdn-compare-r2.zip
-util/vdn-compare/release/vdn-compare-r3.zip
-util/vdn-compare/release/vdn-compare-r1/requirements.txt
-util/vdn-compare/release/vdn-compare-r1/vdn_compare.py
-util/vdn-compare/release/vdn-compare-r2/requirements.txt
-util/vdn-compare/release/vdn-compare-r2/vdn_compare.py
-util/vdn-compare/release/vdn-compare-r3/config.json
-util/vdn-compare/release/vdn-compare-r3/README.md
-util/vdn-compare/release/vdn-compare-r3/requirements.txt
-util/vdn-compare/release/vdn-compare-r3/vdn_compare.py
+
+# VDN Compare - Confidential Data & Scratch Files
+util/vdn-compare/input/
+util/vdn-compare/output/
+util/vdn-compare/release/
+util/vdn-compare/backup/
+util/vdn-compare/*_test*.py
+util/vdn-compare/test2.py
+util/vdn-compare/vdn_compare_report.html
+*.zip
