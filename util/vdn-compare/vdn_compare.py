@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-__version__ = "1.2.6"
+__version__ = "1.2.7"
 
 # Null-like string values produced by pandas/Excel that should be treated as missing data.
 # Centralised here so they're easy to extend without hunting through the codebase.
@@ -328,13 +328,32 @@ def main():
     merged_map = {}
     for m in [shared_map, s1_map, s2_map]:
         merged_map.update(m)
-    # Add defaults that were not overriden
+        
+    # Add defaults ONLY if the target role (e.g., 'VDN_LIST') is not already mapped.
+    # This prevents the default 'DB_targetVdns' from overriding a user's custom selection
+    # if both columns exist in the source file.
+    mapped_roles = set(merged_map.values())
     for k, v in common_map.items():
-        if k not in merged_map:
+        if v not in mapped_roles and k not in merged_map:
             merged_map[k] = v
+            mapped_roles.add(v)
             
     common_map = merged_map
     
+    # 2.5. Pre-rename cleanup: Prevent existing headers from conflicting with target roles.
+    # If a file already has a column named 'VDN_LIST', but we are mapping ANOTHER column to 'VDN_LIST',
+    # the existing one should be renamed so it doesn't "steal" the role name during deduplication.
+    target_roles = set(common_map.values())
+    for df_to_clean in [df_s1, df_s2]:
+        rename_logic = {}
+        for col in df_to_clean.columns:
+            # If the column name exactly matches a target role (e.g., 'VDN_LIST')
+            # but this specific column is NOT the one we intended to map to that role
+            if col in target_roles and col not in common_map:
+                rename_logic[col] = f"{col}_RAW"
+        if rename_logic:
+            df_to_clean.rename(columns=rename_logic, inplace=True)
+
     # We apply the same map to both: order protection
     df_s1.rename(columns=common_map, inplace=True)
     df_s2.rename(columns=common_map, inplace=True)
@@ -700,7 +719,7 @@ def main():
             ]
             
             # Compute detailed tallies ONLY for true discrepancies where VIN exists in both
-            for idx, vin, s_diff, t_diff in zip(mismatch_indices, result_df.loc[mismatch_indices, 'vin'], only_in_s, only_in_t):
+            for idx, vin, s_diff, t_diff, s_set, t_set in zip(mismatch_indices, result_df.loc[mismatch_indices, 'vin'], only_in_s, only_in_t, s_sets, t_sets):
                 if result_df.at[idx, 'VIN_in_s1'] == 0 or result_df.at[idx, 'VIN_in_s2'] == 0:
                     continue
                 
@@ -714,23 +733,29 @@ def main():
                     s_list = sorted(s_groups.get(pref, []))
                     t_list = sorted(t_groups.get(pref, []))
                     for i in range(max(len(s_list), len(t_list))):
-                        sv = s_list[i] if i < len(s_list) else "No Match"
-                        tv = t_list[i] if i < len(t_list) else "No Match"
+                        # Distinguish between "NO DATA" (empty list) and "No Match" (missing specific code)
+                        sv = s_list[i] if i < len(s_list) else ("NO DATA" if not s_set else "No Match")
+                        tv = t_list[i] if i < len(t_list) else ("NO DATA" if not t_set else "No Match")
                         vdn_diff_pairs.append((vin, sv, tv))
         
         # Create VDN Tally DataFrame
         vdn_tally_df = pd.DataFrame(vdn_diff_pairs, columns=['VIN', 'VDN in S1', 'VDN in S2'])
         if not vdn_tally_df.empty:
-            # Aggregate "No Match" cases to show unique VIN counts
-            none_in_s = vdn_tally_df[vdn_tally_df['VDN in S1'] == 'No Match']
-            none_in_t = vdn_tally_df[vdn_tally_df['VDN in S2'] == 'No Match']
-            both_codes = vdn_tally_df[(vdn_tally_df['VDN in S1'] != 'No Match') & (vdn_tally_df['VDN in S2'] != 'No Match')]
+            # We separate "NO DATA" (empty list) from "No Match" (missing specific code)
+            sentinels = ['NO DATA', 'No Match']
+            none_in_s = vdn_tally_df[vdn_tally_df['VDN in S1'].isin(sentinels)]
+            none_in_t = vdn_tally_df[vdn_tally_df['VDN in S2'].isin(sentinels)]
+            both_codes = vdn_tally_df[~vdn_tally_df['VDN in S1'].isin(sentinels) & ~vdn_tally_df['VDN in S2'].isin(sentinels)]
             
             summaries = []
-            if not none_in_s.empty:
-                summaries.append({'VDN in S1': 'No Match', 'VDN in S2': '(Various VDNs)', 'Count': none_in_s['VIN'].nunique()})
-            if not none_in_t.empty:
-                summaries.append({'VDN in S1': '(Various VDNs)', 'VDN in S2': 'No Match', 'Count': none_in_t['VIN'].nunique()})
+            # Aggregate sentinel cases while preserving the distinction
+            for sent in sentinels:
+                sub_s = none_in_s[none_in_s['VDN in S1'] == sent]
+                if not sub_s.empty:
+                    summaries.append({'VDN in S1': sent, 'VDN in S2': '(Various VDNs)', 'Count': sub_s['VIN'].nunique()})
+                sub_t = none_in_t[none_in_t['VDN in S2'] == sent]
+                if not sub_t.empty:
+                    summaries.append({'VDN in S1': '(Various VDNs)', 'VDN in S2': sent, 'Count': sub_t['VIN'].nunique()})
                 
             if not both_codes.empty:
                 # Count unique VINs for each specific pairwise mismatch pattern
