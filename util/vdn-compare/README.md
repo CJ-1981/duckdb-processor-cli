@@ -19,6 +19,7 @@ A high-performance Python utility for comparing vehicle software versions, model
 - **Automated Filtering**: 
     - Use `--skip-filter` to drop specific records globally (e.g., Test vehicles) based on column values.
     - Use `--skip-nodata` to automatically exclude any vehicle that is missing comparison data entirely from either side.
+    - Use `--vdn-ignore` to strip specific 4-character codes (e.g., `9T00`, `FALS`) or families of codes using wildcards (e.g., `ME*`) from VDN lists during comparison.
 
 ## Installation
 
@@ -52,7 +53,8 @@ Example `config.json`:
         "REGION": ["Internal", "Test"],
         "STATUS": ["Prototype"]
     },
-    "skip_nodata": true
+    "skip_nodata": true,
+    "vdn_ignore": ["9T00", "ME*", "FALS"]
 }
 ```
 *Note: All mapping keys (`s1_map`, `s2_map`, `column_map`) are merged into a single "Intelligence Pool." This allows the tool to find your headers even if you swap the Source 1 and Source 2 files.*
@@ -113,6 +115,7 @@ The VDN Compare GUI provides a professional, tabbed interface for managing compl
 - `--skip-nodata`: (Boolean) Automatically skip rows where any requested comparison column is empty or null (Default: `false`).
 - `--config`: Path to a custom configuration JSON (default: `config.json`).
 - `--compare`: Comparison scope. Options: `sw`, `vdn`, `model`, `region`, `vin`, or `all` (default: `all`). `all` automatically includes every column defined in your `column_map`.
+- `--vdn-ignore`: Space-separated list of 4-character VDN codes to ignore during comparison (e.g. `9T00 FALS`). Supports glob wildcards (e.g. `ME*` to ignore all variants starting with `ME`).
 - `--format`: Output format(s). Options: `html`, `md`, `rich`, `csv`.
 - `--normalize-models`: Equivalency groups for models. Format: `"Standard,Alias1,Alias2"`.
 - `--normalize-sw`: Equivalency groups for software. Format: `"Standard,Alias1,Alias2"`.

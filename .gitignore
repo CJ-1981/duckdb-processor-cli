@@ -235,3 +235,4 @@ util/vdn-compare/*_test*.py
 util/vdn-compare/test2.py
 util/vdn-compare/vdn_compare_report.html
 *.zip
+util/vdn-compare/scratch/reproduce_bug.py

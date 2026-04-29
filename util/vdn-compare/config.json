@@ -18,19 +18,60 @@
     "samples": "10",
     "sort_vin": "asc",
     "use_default_input": true,
+    "source1": "C:/Users/Chimin.Jung/OneDrive - Lotus Tech Innovation Centre GmbH/Documents/Obsidian Vault/scripts/duckdb-processor-cli/util/vdn-compare/input/20260427/ALL_regions_20260427_073000.xlsx",
+    "source2": "C:/Users/Chimin.Jung/OneDrive - Lotus Tech Innovation Centre GmbH/Documents/Obsidian Vault/scripts/duckdb-processor-cli/util/vdn-compare/input/20260427/VDN_SW-comparison_DB-export_20260428.xlsx",
     "s1_map": {
         "vin": "VIN",
         "DB_SW": "CONSUMER_SW_VERSION",
-        "DB_targetVdns": "VDN_LIST",
+        "currentVdn": "VDN_LIST",
         "model": "MODEL",
         "region": "REGION"
     },
     "s2_map": {
-        "VIN": "VIN",
-        "CONSUMER_SW_VERSION": "CONSUMER_SW_VERSION",
-        "VDN_LIST": "VDN_LIST",
-        "MODEL": "MODEL",
-        "REGION": "REGION"
+        "vin": "VIN",
+        "DB_SW": "CONSUMER_SW_VERSION",
+        "currentVdn": "VDN_LIST",
+        "model": "MODEL",
+        "region": "REGION"
     },
-    "skip_nodata": false
+    "skip_nodata": false,
+    "normalize_custom": {},
+    "skip_filter": {
+        "REGION": "CN",
+        "VIN": [
+            "YV4EL3YK7SS036678",
+            "YV4EK3ZL7SS036674",
+            "YV12ZEK95RS000241",
+            "YV12ZEL96RS000263",
+            "YV12ZEL92RS000339",
+            "YVV2ZEL98TPC81058",
+            "L6TEY2E14RZ000055",
+            "YV12ZEL99RS000340",
+            "YV4EK3ZK5SS149627",
+            "LYV2NEME4RS000211",
+            "YV12ZEL94RS000245",
+            "YV4EL3YK5SS036677",
+            "YV12ZEL92RS000258",
+            "YV12ZEL99RS000337",
+            "YV12ZEL99RS000239",
+            "YV12ZEK94RS000313",
+            "YV12ZEK99RS000338",
+            "YV4EK3ZL0SS036676",
+            "YV12ZEL97RS000255",
+            "YV12ZEL9XRS000251",
+            "YV4EK3ZL9SS073578",
+            "L6TEY2E10RZ000098",
+            "YV12ZEK90RS000308",
+            "YV12ZEK98RS000265",
+            "YV12ZEM11RS073582",
+            "L6TEY2E2XRZ000201",
+            "YV4EK3ZL3SS007673",
+            "YV12ZEL95RS000254",
+            "YV12ZEL9XRS000248"
+        ]
+    },
+    "vdn_ignore": [
+        "9T00",
+        "FALS"
+    ]
 }

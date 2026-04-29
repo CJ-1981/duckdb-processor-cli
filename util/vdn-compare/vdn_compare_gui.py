@@ -162,7 +162,7 @@ class VDNCompareGUI:
         add_tooltip(lbl_cfg, "Path to a JSON file for custom configuration and column mapping.")
 
         # Hidden Compare Columns variable (synced from Column Settings tab)
-        self.compare_var = tk.StringVar(value="all")
+        self.compare_var = tk.StringVar(value="")
 
         # Sort VIN
         lbl_sort = ttk.Label(self.main_frame, text="Sort VIN:")
@@ -225,24 +225,27 @@ class VDNCompareGUI:
         ent_sf = ttk.Entry(self.main_frame, textvariable=self.skip_filter_var, width=50)
         ent_sf.grid(row=9, column=1, pady=5)
         add_tooltip(lbl_sf, 'Values to skip/exclude, in JSON format: {"ColumnName": ["Value1", "Value2"]}.')
+        
+        # VDN Ignore
+        lbl_vi = ttk.Label(self.main_frame, text="VDN Ignore List:")
+        lbl_vi.grid(row=10, column=0, sticky=tk.W, pady=5)
+        self.vdn_ignore_var = tk.StringVar(value="")
+        ent_vi = ttk.Entry(self.main_frame, textvariable=self.vdn_ignore_var, width=50)
+        ent_vi.grid(row=10, column=1, pady=5)
+        add_tooltip(lbl_vi, 'Space-separated 4-character VDN codes to ignore (e.g. "9T00 FALS"). Supports wildcards like "ME*".')
 
         # Checkboxes for flags
         flags_frame = ttk.Frame(self.main_frame)
-        flags_frame.grid(row=10, column=0, columnspan=3, sticky=tk.W, pady=5)
+        flags_frame.grid(row=11, column=0, columnspan=3, sticky=tk.W, pady=5)
         
         self.skip_nodata_var = tk.BooleanVar(value=True)
         cb_nodata = ttk.Checkbutton(flags_frame, text="Skip Rows with No Data", variable=self.skip_nodata_var)
-        cb_nodata.pack(side=tk.LEFT, padx=(0, 10))
+        cb_nodata.pack(side=tk.LEFT)
         add_tooltip(cb_nodata, 'Skip any row that has missing data in any of the compared columns.')
-
-        self.pager_var = tk.BooleanVar(value=False)
-        cb_pager = ttk.Checkbutton(flags_frame, text="Use Pager for Output", variable=self.pager_var)
-        cb_pager.pack(side=tk.LEFT)
-        add_tooltip(cb_pager, 'Use a less command-line pager for table output.')
 
         # Run & Save Buttons
         btn_frame = ttk.Frame(self.main_frame)
-        btn_frame.grid(row=11, column=0, columnspan=3, pady=10)
+        btn_frame.grid(row=12, column=0, columnspan=3, pady=10)
         
         self.run_btn = ttk.Button(btn_frame, text="Run Comparison", command=self.run_script)
         self.run_btn.pack(side=tk.LEFT, padx=5)
@@ -418,10 +421,7 @@ class VDNCompareGUI:
         for role_id in self.roles:
             if role_id != "vin" and self.mapping_vars[role_id]["compare"].get():
                 selected.append(role_id)
-        if not selected:
-            self.compare_var.set("all")
-        else:
-            self.compare_var.set(" ".join(selected))
+        self.compare_var.set(" ".join(selected))
 
     def apply_mapping(self):
         # We don't change the CLI logic, but we update the compare_var 
@@ -453,10 +453,14 @@ class VDNCompareGUI:
             "samples": self.samples_var.get().strip(),
             "sort_vin": self.sort_vin_var.get(),
             "use_default_input": True, 
+            "source1": self.s1_var.get(),
+            "source2": self.s2_var.get(),
             "s1_map": s1_map,
             "s2_map": s2_map,
             "skip_nodata": self.skip_nodata_var.get(),
-            "normalize_custom": json.loads(self.norm_custom_var.get()) if self.norm_custom_var.get().strip() != "{}" else {}
+            "normalize_custom": json.loads(self.norm_custom_var.get()) if self.norm_custom_var.get().strip() != "{}" else {},
+            "skip_filter": json.loads(self.skip_filter_var.get()) if self.skip_filter_var.get().strip() != "{}" else {},
+            "vdn_ignore": [v.strip().strip('"').strip("'") for v in self.vdn_ignore_var.get().split() if v.strip()]
         }
         
         try:
@@ -479,7 +483,7 @@ class VDNCompareGUI:
         self.sync_compare_var()
         # Always save mapping to the current config file before running
         # so that the CLI subprocess picks up the UI-configured mapping.
-        self.save_full_config_silent()
+        # self.save_full_config_silent()
         
         self.run_btn.config(state=tk.DISABLED)
         self.output_text.delete(1.0, tk.END)
@@ -519,6 +523,10 @@ class VDNCompareGUI:
             
         if self.skip_filter_var.get().strip():
             cmd.extend(["--skip-filter", self.skip_filter_var.get().strip()])
+            
+        if self.vdn_ignore_var.get().strip():
+            cmd.extend(["--vdn-ignore"])
+            cmd.extend(self.vdn_ignore_var.get().split())
 
         # Always add --use-default-input so the CLI doesn't pop up its own file dialog
         cmd.append("--use-default-input")
@@ -531,9 +539,6 @@ class VDNCompareGUI:
         if selected_fmts:
             cmd.append("--format")
             cmd.extend(selected_fmts)
-
-        if self.pager_var.get():
-            cmd.append("--pager")
 
         # Pass VDN_NO_PAUSE so the CLI subprocess never blocks on input()
         _env = os.environ.copy()
@@ -591,6 +596,10 @@ class VDNCompareGUI:
                 for fmt in self.format_options:
                     self.format_vars[fmt].set(fmt in saved_fmts)
             
+            # Source paths
+            if "source1" in config: self.s1_var.set(config["source1"])
+            if "source2" in config: self.s2_var.set(config["source2"])
+            
             # Main settings
             if "samples" in config: self.samples_var.set(str(config["samples"]))
             if "sort_vin" in config: self.sort_vin_var.set(config["sort_vin"])
@@ -614,6 +623,12 @@ class VDNCompareGUI:
 
             if "normalize_custom" in config:
                 self.norm_custom_var.set(json.dumps(config["normalize_custom"]))
+            
+            if "skip_filter" in config:
+                self.skip_filter_var.set(json.dumps(config["skip_filter"]))
+                
+            if "vdn_ignore" in config:
+                self.vdn_ignore_var.set(" ".join(config["vdn_ignore"]))
                 
             # Column Mapping
             s1_map = config.get("s1_map", {})
@@ -673,9 +688,14 @@ class VDNCompareGUI:
             "samples": self.samples_var.get().strip(),
             "sort_vin": self.sort_vin_var.get(),
             "use_default_input": True,
+            "source1": self.s1_var.get(),
+            "source2": self.s2_var.get(),
             "s1_map": s1_map,
             "s2_map": s2_map,
-            "skip_nodata": self.skip_nodata_var.get()
+            "skip_nodata": self.skip_nodata_var.get(),
+            "normalize_custom": json.loads(self.norm_custom_var.get()) if self.norm_custom_var.get().strip() != "{}" else {},
+            "skip_filter": json.loads(self.skip_filter_var.get()) if self.skip_filter_var.get().strip() != "{}" else {},
+            "vdn_ignore": [v.strip().strip('"').strip("'") for v in self.vdn_ignore_var.get().split() if v.strip()]
         }
         try:
             with open(config_path, 'w', encoding='utf-8') as f:

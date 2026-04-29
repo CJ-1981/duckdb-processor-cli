@@ -7,10 +7,12 @@ import argparse
 import duckdb
 import pandas as pd
 import json
+import re
 from datetime import datetime
 from pathlib import Path
+import fnmatch
 
-__version__ = "1.2.7"
+__version__ = "1.3.0"
 
 # Null-like string values produced by pandas/Excel that should be treated as missing data.
 # Centralised here so they're easy to extend without hunting through the codebase.
@@ -89,12 +91,17 @@ def preprocess_df(
     custom_norms: dict,
     normalize_models: list,
     normalize_sw: list,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, dict]:
     """Unified cleanup, filtering, and normalization for comparison targets.
 
-    Parameters are passed explicitly (no closure) so this function can be
-    unit-tested independently of ``main()``.
+    Returns:
+        (DataFrame, stats_dict)
     """
+    stats = {
+        'skip_stats': {}, # column -> {value: count}
+        'norm_stats': {}  # column -> {mapping: count}
+    }
+
     # 2a. Aggressive column/value cleanup
     # Clean column names and ENSURE uniqueness to prevent AttributeError when accessing df[col] later
     cleaned_names = [str(c).strip().replace('"', '') for c in df.columns]
@@ -121,38 +128,65 @@ def preprocess_df(
             if target_col:
                 if not isinstance(f_vals, list):
                     f_vals = [f_vals]
-                # Case-insensitive value matching
-                f_vals_set = set(str(v).strip().upper() for v in f_vals)
-                mask = df[target_col].astype(str).str.strip().str.upper().isin(f_vals_set)
-                skip_count = mask.sum()
-                if skip_count > 0:
-                    df = df[~mask].copy()
-                    cprint(f"[yellow]Filtered {skip_count} rows from {label} where '{target_col}' matched {f_vals_set}[/yellow]")
+                
+                col_skip_details = {}
+                for val in f_vals:
+                    val_s = str(val).strip()
+                    mask = df[target_col].astype(str).str.strip().str.upper() == val_s.upper()
+                    skip_count = mask.sum()
+                    if skip_count > 0:
+                        df = df[~mask].copy()
+                        col_skip_details[val_s] = int(skip_count)
+                
+                if col_skip_details:
+                    stats['skip_stats'][target_col] = col_skip_details
+                    val_summary = ", ".join(f"{v}({count})" for v, count in col_skip_details.items())
+                    cprint(f"[yellow]Filtered {sum(col_skip_details.values())} rows from {label} based on '{target_col}' filters [{val_summary}][/yellow]")
 
     # 2c. Custom business logic normalization for Model comparison
     if compare_model and 'MODEL' in df.columns:
         df['MODEL_NORM'] = df['MODEL']
         df['MODEL_DISPLAY'] = df['MODEL']
+        model_norm_details = {}
         for group in normalize_models:
             models = [m.strip() for m in group.split(',')]
             if len(models) > 1:
                 primary = models[0]
                 for alias in models[1:]:
-                    df.loc[df['MODEL'] == alias, 'MODEL_NORM'] = primary
-                    df.loc[df['MODEL'] == alias, 'MODEL_DISPLAY'] = f"{primary}({alias})"
+                    mask = df['MODEL'] == alias
+                    affected = mask.sum()
+                    if affected > 0:
+                        df.loc[mask, 'MODEL_NORM'] = primary
+                        df.loc[mask, 'MODEL_DISPLAY'] = f"{primary}({alias})"
+                        mapping_key = f"{alias} -> {primary}"
+                        model_norm_details[mapping_key] = model_norm_details.get(mapping_key, 0) + int(affected)
+        if model_norm_details:
+            stats['norm_stats']['MODEL'] = model_norm_details
+            map_summary = ", ".join(f"{m}({count})" for m, count in model_norm_details.items())
+            cprint(f"[cyan]Normalized {sum(model_norm_details.values())} rows in {label} for 'MODEL' [{map_summary}][/cyan]")
 
     # 2d. Custom business logic normalization for SW comparison
     if compare_sw and 'CONSUMER_SW_VERSION' in df.columns:
         df['SW_NORM'] = df['CONSUMER_SW_VERSION']
         df['SW_DISPLAY'] = df['CONSUMER_SW_VERSION']
+        sw_norm_details = {}
         if normalize_sw:
             for group in normalize_sw:
                 versions = [v.strip() for v in group.split(',')]
                 if len(versions) > 1:
                     primary = versions[0]
                     for alias in versions[1:]:
-                        df.loc[df['CONSUMER_SW_VERSION'] == alias, 'SW_NORM'] = primary
-                        df.loc[df['CONSUMER_SW_VERSION'] == alias, 'SW_DISPLAY'] = f"{primary}({alias})"
+                        mask = df['CONSUMER_SW_VERSION'] == alias
+                        affected = mask.sum()
+                        if affected > 0:
+                            df.loc[mask, 'SW_NORM'] = primary
+                            df.loc[mask, 'SW_DISPLAY'] = f"{primary}({alias})"
+                            mapping_key = f"{alias} -> {primary}"
+                            sw_norm_details[mapping_key] = sw_norm_details.get(mapping_key, 0) + int(affected)
+        if sw_norm_details:
+            stats['norm_stats']['SW'] = sw_norm_details
+            map_summary = ", ".join(f"{m}({count})" for m, count in sw_norm_details.items())
+            cprint(f"[cyan]Normalized {sum(sw_norm_details.values())} rows in {label} for 'SW' [{map_summary}][/cyan]")
 
     # 2e. Generic Custom Normalization for any extra columns specified in config
     if custom_norms:
@@ -162,6 +196,7 @@ def preprocess_df(
                 col_disp = f"{norm_col}_DISPLAY"
                 df[col_norm] = df[norm_col]
                 df[col_disp] = df[norm_col]
+                col_norm_details = {}
                 if isinstance(groups, str):
                     groups = [groups]
                 for group in groups:
@@ -169,9 +204,18 @@ def preprocess_df(
                     if len(items) > 1:
                         primary = items[0]
                         for alias in items[1:]:
-                            df.loc[df[norm_col] == alias, col_norm] = primary
-                            df.loc[df[norm_col] == alias, col_disp] = f"{primary}({alias})"
-    return df
+                            mask = df[norm_col] == alias
+                            affected = mask.sum()
+                            if affected > 0:
+                                df.loc[mask, col_norm] = primary
+                                df.loc[mask, col_disp] = f"{primary}({alias})"
+                                mapping_key = f"{alias} -> {primary}"
+                                col_norm_details[mapping_key] = col_norm_details.get(mapping_key, 0) + int(affected)
+                if col_norm_details:
+                    stats['norm_stats'][norm_col] = col_norm_details
+                    map_summary = ", ".join(f"{m}({count})" for m, count in col_norm_details.items())
+                    cprint(f"[cyan]Normalized {sum(col_norm_details.values())} rows in {label} for '{norm_col}' [{map_summary}][/cyan]")
+    return df, stats
 
 
 def save_dataframe(df, file_path, fmt):
@@ -209,12 +253,13 @@ def main():
     parser.add_argument('--samples', default='10', help="Number of samples to show in summary (integer or 'all', default: 10)")
     parser.add_argument('--pager', action='store_true', help="Use a pager to display long console tables")
     parser.add_argument('--use-default-input', action='store_true', help="Load default DB.csv and PIE.csv from /input without file select GUI dialog")
-    parser.add_argument('--compare', nargs='+', default=['all'], help='List of columns to compare. Options: sw, vdn, model, region, vin, or "all" to compare all mapped columns.')
+    parser.add_argument('--compare', nargs='*', default=['all'], help='List of columns to compare. Options: sw, vdn, model, region, vin, or "all" to compare all mapped columns.')
     parser.add_argument('--normalize-models', nargs='+', default=['EX30,V216', 'EX30 CC,V216-CC'], help='Groups of equivalent models, comma-separated (e.g. "EX30,V216" "PS4,P417")')
     parser.add_argument('--normalize-sw', nargs='+', default=['MY27 J1,27 J1'], help='Groups of equivalent SW versions, comma-separated (e.g. "MY27 J1,27 J1" "1.8.0,1.8.0-hotfix")')
     parser.add_argument('--normalize-custom', default="{}", help='Custom normalization rules in JSON format mapping column names to lists of equivalent groups. Best configured via config.json.')
     parser.add_argument('--skip-filter', default="{}", help='Values to skip/exclude, in JSON format: {"ColumnName": ["Value1", "Value2"]}. Rows matching any of these will be dropped.')
     parser.add_argument('--skip-nodata', action='store_true', help='Skip rows with missing data in any compared column')
+    parser.add_argument('--vdn-ignore', nargs='+', default=[], help='List of 4-character VDN codes to ignore during comparison (e.g. "9T00" "FALS")')
     parser.add_argument('--config', help="Path to a JSON file for custom configuration and column mapping", default="config.json")
     
     # 1. Parse known args first to find the config path
@@ -416,37 +461,142 @@ def main():
         normalize_models=args.normalize_models,
         normalize_sw=args.normalize_sw,
     )
-    df_s1 = preprocess_df(df_s1, "Source 1", **_pp_kwargs)
-    df_s2 = preprocess_df(df_s2, "Source 2", **_pp_kwargs)
+    df_s1, s1_stats = preprocess_df(df_s1, "Source 1", **_pp_kwargs)
+    df_s2, s2_stats = preprocess_df(df_s2, "Source 2", **_pp_kwargs)
 
 
     # 3. Parse VDN_LIST smartly
-    def parse_vdn(val):
+    exact_ignores = set()
+    wildcard_regexes = []
+    _ignore_check_cache = {} # Cache for v_up -> is_ignored
+
+    if args.vdn_ignore:
+        # Flatten the list in case patterns were passed as space-separated strings
+        all_patterns = []
+        for p in args.vdn_ignore:
+            all_patterns.extend(str(p).strip().split())
+        
+        # Clean and categorize patterns
+        final_patterns_display = []
+        for p in all_patterns:
+            # Strip whitespace and potential quotes
+            p_up = p.strip().strip('"').strip("'").upper()
+            if not p_up: continue
+            final_patterns_display.append(p_up)
+            
+            if '*' in p_up or '?' in p_up:
+                # Convert glob to regex: * -> .*, ? -> .
+                reg_body = re.escape(p_up).replace(r'\*', '.*').replace(r'\?', '.')
+                wildcard_regexes.append(re.compile(f"^{reg_body}$", re.IGNORECASE))
+            else:
+                exact_ignores.add(p_up)
+        
+        if final_patterns_display:
+            cprint(f"\n[bold cyan]Audit Setup:[/bold cyan] [cyan]Ignoring VDNs matching: {', '.join(final_patterns_display)}[/cyan]")
+    
+    def parse_vdn(val, stats_dict):
         if pd.isna(val) or str(val).strip() in ('nan', ''): return []
         val_str = str(val).strip()
         
         # Check if it's a JSON array
         if val_str.startswith('[') and val_str.endswith(']'):
             try:
-                parsed = json.loads(val_str.replace("'", '"'))
+                # Clean up potential malformed JSON like ["a", , "b"] by removing empty commas
+                # and then parsing.
+                js_str = val_str.replace("'", '"')
+                parsed = json.loads(js_str)
                 if isinstance(parsed, list):
-                    result = sorted(set(str(v).strip() for v in parsed if str(v).strip()))
-                    return result if result else []
+                    result = []
+                    for v in parsed:
+                        v_clean = str(v).strip()
+                        if not v_clean: continue
+                        
+                        v_up = v_clean.upper()
+                        # Optimized ignore check with memoization
+                        if v_up in _ignore_check_cache:
+                            is_ignored = _ignore_check_cache[v_up]
+                        else:
+                            is_ignored = v_up in exact_ignores
+                            if not is_ignored:
+                                for regex in wildcard_regexes:
+                                    if regex.fullmatch(v_up):
+                                        is_ignored = True
+                                        break
+                            _ignore_check_cache[v_up] = is_ignored
+                        
+                        if is_ignored:
+                            stats_dict[v_up] = stats_dict.get(v_up, 0) + 1
+                            continue
+                        
+                        result.append(v_clean)
+                    return sorted(set(result)) if result else []
             except Exception:
-                pass
-                
-        # If not, assume it's concatenated 4-char chunks
-        chunks = [val_str[i:i+4] for i in range(0, len(val_str), 4)]
-        result = sorted(set(c for c in chunks if c.strip()))
-        return result if result else []
+                # Fallback for malformed comma-separated lists like ["a", , "b"]
+                # Split by comma, then strip brackets, quotes, and whitespace from each piece.
+                parts = val_str.strip('[]').split(',')
+                result = []
+                for p in parts:
+                    v_clean = p.strip().strip('"').strip("'").strip()
+                    if not v_clean: continue
+                    
+                    v_up = v_clean.upper()
+                    # Optimized ignore check with memoization
+                    if v_up in _ignore_check_cache:
+                        is_ignored = _ignore_check_cache[v_up]
+                    else:
+                        is_ignored = v_up in exact_ignores
+                        if not is_ignored:
+                            for regex in wildcard_regexes:
+                                if regex.fullmatch(v_up):
+                                    is_ignored = True
+                                    break
+                        _ignore_check_cache[v_up] = is_ignored
+                    
+                    if is_ignored:
+                        stats_dict[v_up] = stats_dict.get(v_up, 0) + 1
+                        continue
+                        
+                    result.append(v_clean)
+                return sorted(set(result)) if result else []
 
+        # If not a list, assume it's concatenated 4-char chunks (e.g. 9T008A01)
+        chunks = [val_str[i:i+4] for i in range(0, len(val_str), 4)]
+        
+        result = []
+        for c in chunks:
+            v_clean = c.strip()
+            if not v_clean: continue
+            
+            v_up = v_clean.upper()
+            # Optimized ignore check with memoization
+            if v_up in _ignore_check_cache:
+                is_ignored = _ignore_check_cache[v_up]
+            else:
+                is_ignored = v_up in exact_ignores
+                if not is_ignored:
+                    for regex in wildcard_regexes:
+                        if regex.fullmatch(v_up):
+                            is_ignored = True
+                            break
+                _ignore_check_cache[v_up] = is_ignored
+            
+            if is_ignored:
+                stats_dict[v_up] = stats_dict.get(v_up, 0) + 1
+                continue
+                
+            result.append(v_clean)
+        
+        return sorted(set(result)) if result else []
+
+    vdn_ignore_stats = {'s1': {}, 's2': {}}
     for df_label, df in [('Source 1', df_s1), ('Source 2', df_s2)]:
+        label_key = 's1' if df_label == 'Source 1' else 's2'
         if compare_vdn and 'VDN_LIST' in df.columns:
             if has_tqdm:
                 cprint(f"[cyan]Parsing VDNs for {df_label}...[/cyan]")
-                df['VDN_LIST_CLEAN'] = df['VDN_LIST'].progress_apply(lambda x: json.dumps(parse_vdn(x)))
+                df['VDN_LIST_CLEAN'] = df['VDN_LIST'].progress_apply(lambda x: json.dumps(parse_vdn(x, vdn_ignore_stats[label_key])))
             else:
-                df['VDN_LIST_CLEAN'] = df['VDN_LIST'].apply(lambda x: json.dumps(parse_vdn(x)))
+                df['VDN_LIST_CLEAN'] = df['VDN_LIST'].apply(lambda x: json.dumps(parse_vdn(x, vdn_ignore_stats[label_key])))
             # Free up memory containing original heavy string values early
             df.drop(columns=['VDN_LIST'], inplace=True)
 
@@ -499,8 +649,12 @@ def main():
         # Part 2: VDN Prefix Conflicts
         prefix_conflicts = []
         if 'VDN_LIST_CLEAN' in df.columns:
-            # We use a temporary series to avoid modifying the dataframe for this audit
-            conflict_series = df['VDN_LIST_CLEAN'].apply(find_vdn_prefix_conflicts)
+            if has_tqdm:
+                cprint(f"[cyan]Auditing VDN Prefix Conflicts for {label.upper()}...[/cyan]")
+                conflict_series = df['VDN_LIST_CLEAN'].progress_apply(find_vdn_prefix_conflicts)
+            else:
+                conflict_series = df['VDN_LIST_CLEAN'].apply(find_vdn_prefix_conflicts)
+                
             conflict_mask = conflict_series.notna()
             for vin, conflict_desc in zip(df[conflict_mask]['VIN'], conflict_series[conflict_mask]):
                 prefix_conflicts.append(f"{vin} [Conflicts: {conflict_desc}]")
@@ -538,7 +692,10 @@ def main():
             'prefix_conflicts': sorted(prefix_conflicts),
             'empty_data': empty_data,
             'vin_empty_map': vin_empty_map,
-            'u_empty_vins': u_empty_vins
+            'u_empty_vins': u_empty_vins,
+            'skip_stats': s1_stats['skip_stats'] if label == 's1' else s2_stats['skip_stats'],
+            'norm_stats': s1_stats['norm_stats'] if label == 's1' else s2_stats['norm_stats'],
+            'vdn_ignore_stats': vdn_ignore_stats[label]
         }
 
     # Console Warnings (Immediate)
@@ -872,7 +1029,15 @@ def main():
     # ---------------------------------------------------------
     # AUDIT DETAILS (Console)
     # ---------------------------------------------------------
-    has_audit_errors = any(audit_results[l]['dup_vins'] or audit_results[l]['prefix_conflicts'] or audit_results[l]['empty_data'] for l in ['s1', 's2'])
+    has_audit_errors = any(
+        audit_results[l]['dup_vins'] or 
+        audit_results[l]['prefix_conflicts'] or 
+        audit_results[l]['empty_data'] or
+        audit_results[l]['skip_stats'] or
+        audit_results[l]['norm_stats'] or
+        audit_results[l]['vdn_ignore_stats']
+        for l in ['s1', 's2']
+    )
     if has_audit_errors:
         summary_lines_console.append("")
         summary_lines_console.append("-" * 40)
@@ -881,6 +1046,25 @@ def main():
         for label in ['s1', 's2']:
             res = audit_results[label]
             l_disp = "Source 1" if label == 's1' else "Source 2"
+            
+            if res['skip_stats']:
+                details = []
+                for col, vals in res['skip_stats'].items():
+                    val_str = ", ".join(f"{v}({count})" for v, count in vals.items())
+                    details.append(f"{col}[{val_str}]")
+                summary_lines_console.append(f"Skipped Rows in {l_disp} (Filters: {'; '.join(details)}):")
+
+            if res['norm_stats']:
+                details = []
+                for col, mappings in res['norm_stats'].items():
+                    map_str = ", ".join(f"{m}({count})" for m, count in mappings.items())
+                    details.append(f"{col}[{map_str}]")
+                summary_lines_console.append(f"Normalized Rows in {l_disp} (Mappings: {'; '.join(details)}):")
+
+            if res['vdn_ignore_stats']:
+                details = [f"{code}({count})" for code, count in res['vdn_ignore_stats'].items()]
+                summary_lines_console.append(f"Ignored VDN Codes in {l_disp} (Codes: {', '.join(details)}):")
+
             if res['dup_vins']:
                 v_list = res['dup_vins']
                 summary_lines_console.append(f"Duplicate VINs in {l_disp}:")
@@ -998,23 +1182,31 @@ def main():
         title = f"{'SAMPLES: ' if sample_limit else ''}{md['label']} MISMATCHES ({len(df_sample)} shown of {md['u_count']} unique VINs)"
         render_console_table(df_sample[cols], title, header_style="bold magenta")
 
-    # Missing in Source 1 Samples
+    # Missing in Source 1 Samples (Found only in S2)
     if not missing_in_s1.empty:
         df_ms = missing_in_s1.head(sample_limit) if sample_limit else missing_in_s1
         cols = ['vin']
-        if compare_model: cols.append('s2_model')
-        if compare_sw: cols.append('s2_sw')
+        for col in existing_targets:
+            if col == 'VDN_LIST': cols.append('Only in S2')
+            elif col == 'CONSUMER_SW_VERSION': cols.append('s2_sw')
+            elif col == 'MODEL': cols.append('s2_model')
+            else: cols.append(f's2_{col.lower()}')
+            
         title_ms = f"{'SAMPLES: ' if sample_limit else ''}VINs FOUND ONLY IN SOURCE 2 ({len(df_ms)} entries shown of {u_only_s2} unique VINs)"
-        render_console_table(df_ms[cols], title_ms, header_style="bold yellow")
+        render_console_table(df_ms[[c for c in cols if c in df_ms.columns]], title_ms, header_style="bold yellow")
         
-    # Missing in Source 2 Samples
+    # Missing in Source 2 Samples (Found only in S1)
     if not missing_in_s2.empty:
         df_mt = missing_in_s2.head(sample_limit) if sample_limit else missing_in_s2
         cols = ['vin']
-        if compare_model: cols.append('s1_model')
-        if compare_sw: cols.append('s1_sw')
+        for col in existing_targets:
+            if col == 'VDN_LIST': cols.append('Only in S1')
+            elif col == 'CONSUMER_SW_VERSION': cols.append('s1_sw')
+            elif col == 'MODEL': cols.append('s1_model')
+            else: cols.append(f's1_{col.lower()}')
+            
         title_mt = f"{'SAMPLES: ' if sample_limit else ''}VINs FOUND ONLY IN SOURCE 1 ({len(df_mt)} entries shown of {u_only_s1} unique VINs)"
-        render_console_table(df_mt[cols], title_mt, header_style="bold yellow")
+        render_console_table(df_mt[[c for c in cols if c in df_mt.columns]], title_mt, header_style="bold yellow")
 
     # (Already handled above)
 
@@ -1176,6 +1368,35 @@ def main():
                     res = audit_results[label]
                     l_disp = "Source 1" if label == 's1' else "Source 2"
                     
+                    if res['skip_stats']:
+                        details = []
+                        for col, vals in res['skip_stats'].items():
+                            val_str = ", ".join(f"{v} ({count})" for v, count in vals.items())
+                            details.append(f"{col} [{val_str}]")
+                        breakdown = "; ".join(details)
+                        if is_html:
+                            summary_lines.append(f"<li><b>Skipped Rows in {l_disp}</b> (Filters: {breakdown})</li>")
+                        else:
+                            summary_lines.append(f"- **Skipped Rows in {l_disp}** (Filters: {breakdown})")
+
+                    if res['norm_stats']:
+                        details = []
+                        for col, mappings in res['norm_stats'].items():
+                            map_str = ", ".join(f"{m} ({count})" for m, count in mappings.items())
+                            details.append(f"{col} [{map_str}]")
+                        breakdown = "; ".join(details)
+                        if is_html:
+                            summary_lines.append(f"<li><b>Normalized Rows in {l_disp}</b> (Mappings: {breakdown})</li>")
+                        else:
+                            summary_lines.append(f"- **Normalized Rows in {l_disp}** (Mappings: {breakdown})")
+
+                    if res['vdn_ignore_stats']:
+                        breakdown = ", ".join(f"{code} ({count})" for code, count in res['vdn_ignore_stats'].items())
+                        if is_html:
+                            summary_lines.append(f"<li><b>Ignored VDN Codes in {l_disp}</b> (Codes: {breakdown})</li>")
+                        else:
+                            summary_lines.append(f"- **Ignored VDN Codes in {l_disp}** (Codes: {breakdown})")
+                    
                     if res['dup_vins']:
                         if is_html:
                             summary_lines.append(f"<li><b>Duplicate VINs in {l_disp}</b>:<ul>")
@@ -1256,6 +1477,26 @@ def main():
                 f"Source 1 Incomplete: {audit_results['s1']['u_empty_vins']} VINs",
                 f"Source 2 Incomplete: {audit_results['s2']['u_empty_vins']} VINs",
             ])
+            for label in ['s1', 's2']:
+                res = audit_results[label]
+                l_disp = "Source 1" if label == 's1' else "Source 2"
+                if res['skip_stats']:
+                    details = []
+                    for col, vals in res['skip_stats'].items():
+                        val_str = ", ".join(f"{v}({count})" for v, count in vals.items())
+                        details.append(f"{col}[{val_str}]")
+                    summary_lines.append(f"Skipped Rows in {l_disp} (Filters: {'; '.join(details)})")
+                if res['norm_stats']:
+                    details = []
+                    for col, mappings in res['norm_stats'].items():
+                        map_str = ", ".join(f"{m}({count})" for m, count in mappings.items())
+                        details.append(f"{col}[{map_str}]")
+                    summary_lines.append(f"Normalized Rows in {l_disp} (Mappings: {'; '.join(details)})")
+                
+                if res['vdn_ignore_stats']:
+                    details = [f"{code}({count})" for code, count in res['vdn_ignore_stats'].items()]
+                    summary_lines.append(f"Ignored VDN Codes in {l_disp} (Codes: {', '.join(details)})")
+
             if args.skip_nodata:
                 summary_lines.extend([
                     f"Source 1 Skipped (No-Data): {skipped_nodata['s1']} VINs",
@@ -1345,8 +1586,11 @@ def main():
             title_ms = f"{'SAMPLES: ' if sample_limit else ''}VINs MISSING IN SOURCE 1 ({len(df_ms)} entries out of total {len(missing_in_s1)} findings)"
             report_cols_ms = ['vin']
             for col in existing_targets:
-                target_name = 'sw' if col == 'CONSUMER_SW_VERSION' else ('model' if col == 'MODEL' else col.lower())
-                report_cols_ms.append(f's2_{target_name}_display')
+                if col == 'VDN_LIST':
+                    report_cols_ms.append('Only in S2')
+                else:
+                    target_name = 'sw' if col == 'CONSUMER_SW_VERSION' else ('model' if col == 'MODEL' else col.lower())
+                    report_cols_ms.append(f's2_{target_name}')
             save_sample_section(df_ms[[c for c in report_cols_ms if c in df_ms.columns]], title_ms, "bold yellow", anchor_id="samples-missing-in-source1")
             
         if not missing_in_s2.empty:
@@ -1354,8 +1598,11 @@ def main():
             title_mt = f"{'SAMPLES: ' if sample_limit else ''}VINs MISSING IN SOURCE 2 ({len(df_mt)} entries out of total {len(missing_in_s2)} findings)"
             report_cols_mt = ['vin']
             for col in existing_targets:
-                target_name = 'sw' if col == 'CONSUMER_SW_VERSION' else ('model' if col == 'MODEL' else col.lower())
-                report_cols_mt.append(f's1_{target_name}_display')
+                if col == 'VDN_LIST':
+                    report_cols_mt.append('Only in S1')
+                else:
+                    target_name = 'sw' if col == 'CONSUMER_SW_VERSION' else ('model' if col == 'MODEL' else col.lower())
+                    report_cols_mt.append(f's1_{target_name}')
             save_sample_section(df_mt[[c for c in report_cols_mt if c in df_mt.columns]], title_mt, "bold yellow", anchor_id="samples-missing-in-source2")
 
         if mismatches_only.empty and missing_in_s1.empty and missing_in_s2.empty:
