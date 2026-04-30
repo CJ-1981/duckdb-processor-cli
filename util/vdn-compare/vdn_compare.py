@@ -729,7 +729,8 @@ def main():
             'skip_stats': s1_stats['skip_stats'] if label == 's1' else s2_stats['skip_stats'],
             'skipped_vins': s1_stats.get('skipped_vins', set()) if label == 's1' else s2_stats.get('skipped_vins', set()),
             'norm_stats': s1_stats['norm_stats'] if label == 's1' else s2_stats['norm_stats'],
-            'vdn_ignore_stats': vdn_ignore_stats[label]
+            'vdn_ignore_stats': vdn_ignore_stats[label],
+            'present_vins': set(df['VIN'].astype(str).unique())
         }
 
     # Console Warnings (Immediate)
@@ -1193,11 +1194,15 @@ def main():
 
             # Cross-reference: VINs in THIS source that appear as SKIPPED because OTHER source's filter removed them
             other_skipped = other_res.get('skipped_vins', set())
+            this_present = res.get('present_vins', set())
             if other_skipped and other_res.get('skip_stats'):
-                summary_lines_console.append(
-                    f"  [Note] {len(other_skipped)} VIN(s) in {l_disp} show as SKIPPED because "
-                    f"they were excluded by {other_disp}'s skip filter."
-                )
+                intersection = this_present & other_skipped
+                intersection_count = len(intersection)
+                if intersection_count > 0:
+                    summary_lines_console.append(
+                        f"  [Note] {intersection_count} VIN(s) in {l_disp} show as SKIPPED because "
+                        f"they were excluded by {other_disp}'s skip filter."
+                    )
 
             if res['norm_stats']:
                 details = []
@@ -1649,11 +1654,14 @@ def main():
                     summary_lines.append(f"Skipped Rows in {l_disp} (Filters: {'; '.join(details)})")
                 # Cross-reference: other source's skip filter impact
                 other_skipped = other_res.get('skipped_vins', set())
+                this_present = res.get('present_vins', set())
                 if other_skipped and other_res.get('skip_stats'):
-                    summary_lines.append(
-                        f"  [Note] {len(other_skipped)} VIN(s) in {l_disp} show as SKIPPED "
-                        f"because they were excluded by {other_disp}'s skip filter."
-                    )
+                    intersection_count = len(this_present & other_skipped)
+                    if intersection_count > 0:
+                        summary_lines.append(
+                            f"  [Note] {intersection_count} VIN(s) in {l_disp} show as SKIPPED "
+                            f"because they were excluded by {other_disp}'s skip filter."
+                        )
                 if res['norm_stats']:
                     details = []
                     for col, mappings in res['norm_stats'].items():
