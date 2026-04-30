@@ -95,11 +95,12 @@ def preprocess_df(
     """Unified cleanup, filtering, and normalization for comparison targets.
 
     Returns:
-        (DataFrame, stats_dict)
+        (DataFrame, stats_dict) where stats_dict includes 'skipped_vins': set of VINs removed by skip filters.
     """
     stats = {
         'skip_stats': {}, # column -> {value: count}
-        'norm_stats': {}  # column -> {mapping: count}
+        'norm_stats': {},  # column -> {mapping: count}
+        'skipped_vins': set()  # VINs removed by skip filters (tracked BEFORE drop)
     }
 
     # 2a. Aggressive column/value cleanup
@@ -135,6 +136,11 @@ def preprocess_df(
                     mask = df[target_col].astype(str).str.strip().str.upper() == val_s.upper()
                     skip_count = mask.sum()
                     if skip_count > 0:
+                        # Track VINs being removed so we can annotate the export later
+                        if 'VIN' in df.columns:
+                            stats['skipped_vins'].update(
+                                df.loc[mask, 'VIN'].dropna().astype(str).tolist()
+                            )
                         df = df[~mask].copy()
                         col_skip_details[val_s] = int(skip_count)
                 
@@ -346,14 +352,6 @@ def main():
         
         root.destroy()
 
-    # Start the timer here to exclude file dialog interaction time
-    start_time = time.time()
-    cprint(f"[cyan]Loading Source 1:[/cyan] [bold white]{args.source1}[/bold white]")
-    df_s1 = load_file(args.source1)
-    
-    cprint(f"[cyan]Loading Source 2:[/cyan] [bold white]{args.source2}[/bold white]")
-    df_s2 = load_file(args.source2)
-
     # NOTE: The values (right-hand side) are RESERVED INTERNAL HEADERS.
     # To support new columns, map your name (left) to one of these 4 reserved names.
     common_map = {
@@ -384,6 +382,24 @@ def main():
             mapped_roles.add(v)
             
     common_map = merged_map
+    
+    # Start the timer here to exclude file dialog interaction time
+    start_time = time.time()
+    
+    # Helper to aggressively drop memory of unused columns right after loading
+    def _keep_mapped_only(df):
+        keep_cols = [c for c in df.columns if c in common_map.keys() or c in common_map.values() or c.upper() == 'VIN']
+        return df[keep_cols].copy()
+
+    cprint(f"[cyan]Loading Source 1:[/cyan] [bold white]{args.source1}[/bold white]")
+    df_s1 = load_file(args.source1)
+    df_s1 = _keep_mapped_only(df_s1)
+    gc.collect()
+    
+    cprint(f"[cyan]Loading Source 2:[/cyan] [bold white]{args.source2}[/bold white]")
+    df_s2 = load_file(args.source2)
+    df_s2 = _keep_mapped_only(df_s2)
+    gc.collect()
     
     # 2.5. Pre-rename cleanup: Prevent existing headers from conflicting with target roles.
     # If a file already has a column named 'VDN_LIST', but we are mapping ANOTHER column to 'VDN_LIST',
@@ -592,13 +608,30 @@ def main():
     for df_label, df in [('Source 1', df_s1), ('Source 2', df_s2)]:
         label_key = 's1' if df_label == 'Source 1' else 's2'
         if compare_vdn and 'VDN_LIST' in df.columns:
+            # Aggressive garbage collection before heavy string parsing
+            gc.collect()
+            
+            def _fast_vdn_parse(x):
+                parsed = parse_vdn(x, vdn_ignore_stats[label_key])
+                return json.dumps(parsed) if parsed else '[]'
+                
+            # Use raw Python list comprehension to avoid pandas map_infer MemoryError
+            raw_vdn_list = df['VDN_LIST'].tolist()
+            
             if has_tqdm:
+                from tqdm import tqdm
                 cprint(f"[cyan]Parsing VDNs for {df_label}...[/cyan]")
-                df['VDN_LIST_CLEAN'] = df['VDN_LIST'].progress_apply(lambda x: json.dumps(parse_vdn(x, vdn_ignore_stats[label_key])))
+                clean_vdns = [_fast_vdn_parse(x) for x in tqdm(raw_vdn_list, desc=f"Parsing {df_label}")]
             else:
-                df['VDN_LIST_CLEAN'] = df['VDN_LIST'].apply(lambda x: json.dumps(parse_vdn(x, vdn_ignore_stats[label_key])))
+                clean_vdns = [_fast_vdn_parse(x) for x in raw_vdn_list]
+                
+            df['VDN_LIST_CLEAN'] = clean_vdns
+            
             # Free up memory containing original heavy string values early
             df.drop(columns=['VDN_LIST'], inplace=True)
+            del raw_vdn_list
+            del clean_vdns
+            gc.collect()
 
     # 3.2. EXTRA FILTER: Skip rows with missing/empty data if requested
     skipped_nodata = {'s1': 0, 's2': 0}
@@ -694,6 +727,7 @@ def main():
             'vin_empty_map': vin_empty_map,
             'u_empty_vins': u_empty_vins,
             'skip_stats': s1_stats['skip_stats'] if label == 's1' else s2_stats['skip_stats'],
+            'skipped_vins': s1_stats.get('skipped_vins', set()) if label == 's1' else s2_stats.get('skipped_vins', set()),
             'norm_stats': s1_stats['norm_stats'] if label == 's1' else s2_stats['norm_stats'],
             'vdn_ignore_stats': vdn_ignore_stats[label]
         }
@@ -708,10 +742,6 @@ def main():
             cprint(f"[bold yellow]DATA AUDIT WARNING: {len(res['prefix_conflicts'])} VINs with VDN Prefix Conflicts found in {l_disp} file.[/bold yellow]")
         if res['u_empty_vins']:
             cprint(f"[bold yellow]DATA AUDIT WARNING: {res['u_empty_vins']} VINs with missing/empty data in compared columns found in {l_disp} file.[/bold yellow]")
-    con = duckdb.connect()
-    con.register('s1_db', df_s1)
-    con.register('s2_db', df_s2)
-
     sort_clause = f"ORDER BY vin {args.sort_vin.upper()}" if args.sort_vin != 'none' else ""
     
     s_selects = ["VIN as vin"]
@@ -737,34 +767,82 @@ def main():
         
     s_selects_str = ",\n            ".join(s_selects)
     t_selects_str = ",\n            ".join(t_selects)
-    
+
+    # --- Slim down DataFrames to only the columns the query actually needs ---
+    # This dramatically reduces memory pressure before handing data to DuckDB.
+    def _slim_df(df, selects_list):
+        """Keep only the source columns referenced by a SELECT list."""
+        # Extract raw column names from alias expressions like "SW_NORM as s1_sw"
+        needed = set()
+        needed.add('VIN')  # always needed for the WHERE/JOIN
+        for expr in selects_list:
+            src = expr.split(' as ')[0].strip().split('(')[-1].rstrip(')')
+            if src and src.upper() != 'VIN':
+                needed.add(src)
+        keep = [c for c in df.columns if c in needed]
+        return df[keep].copy()
+
+    # Deduplicate in pandas to avoid memory-heavy QUALIFY ROW_NUMBER() in DuckDB
+    # We do this BEFORE slimming down the dataframe, just in case there are other columns
+    # that determine which row is "first" (pandas drop_duplicates keeps the first row it sees).
+    if 'VIN' in df_s1.columns:
+        df_s1 = df_s1.drop_duplicates(subset=['VIN'], keep='first')
+    if 'VIN' in df_s2.columns:
+        df_s2 = df_s2.drop_duplicates(subset=['VIN'], keep='first')
+
+    # Slim down DataFrames to only the columns the query actually needs
+    df_s1 = _slim_df(df_s1, s_selects)
+    df_s2 = _slim_df(df_s2, t_selects)
+
+    # --- Write to CSV and free pandas memory BEFORE DuckDB reads ---
+    # Using CSV (not Parquet) avoids PyArrow's contiguous-buffer realloc,
+    # which fails with OOM on large VDN_LIST_CLEAN columns.
+    # pandas to_csv writes row-by-row; DuckDB read_csv_auto reads lazily.
+    _tmp_dir = Path('output') / '_duckdb_tmp'
+    _tmp_dir.mkdir(parents=True, exist_ok=True)
+    _s1_csv = str(_tmp_dir / 's1.csv')
+    _s2_csv = str(_tmp_dir / 's2.csv')
+
+    df_s1.to_csv(_s1_csv, index=False)
+    df_s2.to_csv(_s2_csv, index=False)
+    del df_s1
+    del df_s2
+    gc.collect()
+
+    # --- DuckDB: read from CSV on disk ---
+    con = duckdb.connect()
+    con.execute(f"SET temp_directory='{str(_tmp_dir)}'")
+    con.execute("SET threads=2")  # reduce parallelism to ease peak RSS
+
     joined_selects = ["COALESCE(s.vin, t.vin) as vin"]
     joined_selects.append("CASE WHEN s.vin IS NOT NULL THEN 1 ELSE 0 END as VIN_in_s1")
     joined_selects.append("CASE WHEN t.vin IS NOT NULL THEN 1 ELSE 0 END as VIN_in_s2")
     
     for col in existing_targets:
         if col == 'CONSUMER_SW_VERSION':
-            joined_selects.append("CASE WHEN s.vin IS NULL THEN 'N/A' ELSE COALESCE(s.s1_sw_disp, 'NO DATA') END as s1_sw_display")
-            joined_selects.append("CASE WHEN t.vin IS NULL THEN 'N/A' ELSE COALESCE(t.s2_sw_disp, 'NO DATA') END as s2_sw_display")
+            joined_selects.append("CASE WHEN s.vin IS NULL THEN 'NO VIN FOUND' ELSE COALESCE(s.s1_sw_disp, 'NO DATA') END as s1_sw_display")
+            joined_selects.append("CASE WHEN t.vin IS NULL THEN 'NO VIN FOUND' ELSE COALESCE(t.s2_sw_disp, 'NO DATA') END as s2_sw_display")
             joined_selects.append("CASE WHEN s.vin IS NULL OR t.vin IS NULL THEN 'MISMATCH' WHEN s.s1_sw IS NOT DISTINCT FROM t.s2_sw THEN 'MATCH' ELSE 'MISMATCH' END as sw_match")
         elif col == 'MODEL':
-            joined_selects.append("CASE WHEN s.vin IS NULL THEN 'N/A' ELSE COALESCE(s.s1_model_disp, 'NO DATA') END as s1_model_display")
-            joined_selects.append("CASE WHEN t.vin IS NULL THEN 'N/A' ELSE COALESCE(t.s2_model_disp, 'NO DATA') END as s2_model_display")
+            joined_selects.append("CASE WHEN s.vin IS NULL THEN 'NO VIN FOUND' ELSE COALESCE(s.s1_model_disp, 'NO DATA') END as s1_model_display")
+            joined_selects.append("CASE WHEN t.vin IS NULL THEN 'NO VIN FOUND' ELSE COALESCE(t.s2_model_disp, 'NO DATA') END as s2_model_display")
             joined_selects.append("CASE WHEN s.vin IS NULL OR t.vin IS NULL THEN 'MISMATCH' WHEN s.s1_model IS NOT DISTINCT FROM t.s2_model THEN 'MATCH' ELSE 'MISMATCH' END as model_match")
         elif col == 'VDN_LIST':
             joined_selects.append("CASE WHEN s.vin IS NULL OR t.vin IS NULL THEN 'MISMATCH' WHEN s.s1_vdns_json IS NOT DISTINCT FROM t.s2_vdns_json THEN 'MATCH' ELSE 'MISMATCH' END as vdn_match")
-            joined_selects.append("s.s1_vdns_json as s1_json")
-            joined_selects.append("t.s2_vdns_json as s2_json")
+            # Memory optimization: Only keep the massive JSON strings if they don't match.
+            # If they match, we don't need them for the mismatch tally downstream.
+            joined_selects.append("CASE WHEN s.s1_vdns_json IS NOT DISTINCT FROM t.s2_vdns_json THEN NULL ELSE s.s1_vdns_json END as s1_json")
+            joined_selects.append("CASE WHEN s.s1_vdns_json IS NOT DISTINCT FROM t.s2_vdns_json THEN NULL ELSE t.s2_vdns_json END as s2_json")
         else:
             # Generic logic
             m_col = f"{col.lower()}_match"
             if custom_norms and col in custom_norms:
-                joined_selects.append(f"CASE WHEN s.vin IS NULL THEN 'N/A' ELSE COALESCE(s.s1_{col}_disp, 'NO DATA') END as s1_{col.lower()}_display")
-                joined_selects.append(f"CASE WHEN t.vin IS NULL THEN 'N/A' ELSE COALESCE(t.s2_{col}_disp, 'NO DATA') END as s2_{col.lower()}_display")
+                joined_selects.append(f"CASE WHEN s.vin IS NULL THEN 'NO VIN FOUND' ELSE COALESCE(s.s1_{col}_disp, 'NO DATA') END as s1_{col.lower()}_display")
+                joined_selects.append(f"CASE WHEN t.vin IS NULL THEN 'NO VIN FOUND' ELSE COALESCE(t.s2_{col}_disp, 'NO DATA') END as s2_{col.lower()}_display")
                 joined_selects.append(f"CASE WHEN s.vin IS NULL OR t.vin IS NULL THEN 'MISMATCH' WHEN s.s1_{col}_norm IS NOT DISTINCT FROM t.s2_{col}_norm THEN 'MATCH' ELSE 'MISMATCH' END as {m_col}")
             else:
-                joined_selects.append(f"CASE WHEN s.vin IS NULL THEN 'N/A' ELSE COALESCE(CAST(s.s1_{col} as VARCHAR), 'NO DATA') END as s1_{col.lower()}_display")
-                joined_selects.append(f"CASE WHEN t.vin IS NULL THEN 'N/A' ELSE COALESCE(CAST(t.s2_{col} as VARCHAR), 'NO DATA') END as s2_{col.lower()}_display")
+                joined_selects.append(f"CASE WHEN s.vin IS NULL THEN 'NO VIN FOUND' ELSE COALESCE(CAST(s.s1_{col} as VARCHAR), 'NO DATA') END as s1_{col.lower()}_display")
+                joined_selects.append(f"CASE WHEN t.vin IS NULL THEN 'NO VIN FOUND' ELSE COALESCE(CAST(t.s2_{col} as VARCHAR), 'NO DATA') END as s2_{col.lower()}_display")
                 joined_selects.append(f"CASE WHEN s.vin IS NULL OR t.vin IS NULL THEN 'MISMATCH' WHEN s.s1_{col} IS NOT DISTINCT FROM t.s2_{col} THEN 'MATCH' ELSE 'MISMATCH' END as {m_col}")
         
     joined_selects_str = ",\n            ".join(joined_selects)
@@ -795,28 +873,17 @@ def main():
         
     final_selects_str = ",\n        ".join(final_selects)
 
-    # NOTE: QUALIFY ROW_NUMBER() deduplicates per VIN before the join.
-    # Without this, duplicate VINs produce a cross-product (N*M rows per VIN pair),
-    # inflating all downstream mismatch counts and sample tables.
-    # The first occurrence in each source (by natural row order) is kept as canonical.
+    # Note: We already deduplicated per VIN in pandas, so no QUALIFY ROW_NUMBER() needed.
     compare_query = f"""
-    WITH s1_raw AS (
+    WITH s1_data AS (
         SELECT {s_selects_str}
-        FROM s1_db
-        WHERE VIN IS NOT NULL AND VIN != 'nan'
-    ),
-    s1_data AS (
-        SELECT * FROM s1_raw
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY vin ORDER BY (SELECT NULL)) = 1
-    ),
-    s2_raw AS (
-        SELECT {t_selects_str}
-        FROM s2_db
+        FROM read_csv_auto('{_s1_csv.replace(chr(92), '/')}', header=true, all_varchar=true)
         WHERE VIN IS NOT NULL AND VIN != 'nan'
     ),
     s2_data AS (
-        SELECT * FROM s2_raw
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY vin ORDER BY (SELECT NULL)) = 1
+        SELECT {t_selects_str}
+        FROM read_csv_auto('{_s2_csv.replace(chr(92), '/')}', header=true, all_varchar=true)
+        WHERE VIN IS NOT NULL AND VIN != 'nan'
     ),
     joined AS (
         SELECT
@@ -830,13 +897,65 @@ def main():
     {sort_clause}
     """
     
-    result_df = con.execute(compare_query).df()
+    # Bypass PyArrow's contiguous memory allocation failure (.df() OOM)
+    # by letting DuckDB stream results to a temporary CSV, then reading with Pandas.
+    _tmp_out = str(_tmp_dir / 'result.csv')
+    copy_query = f"COPY ({compare_query}) TO '{_tmp_out.replace(chr(92), '/')}' (HEADER, DELIMITER ',')"
+    con.execute(copy_query)
     
-    # Free up heavy dataframe hashes immediately
-    del df_s1
-    del df_s2
+    # Free up DuckDB resources BEFORE loading result into pandas
     con.close()
     gc.collect()
+
+    result_df = pd.read_csv(_tmp_out, dtype=str, keep_default_na=False)
+    # Restore numeric types for the boolean flags that got converted to strings
+    if 'VIN_in_s1' in result_df.columns: result_df['VIN_in_s1'] = pd.to_numeric(result_df['VIN_in_s1'])
+    if 'VIN_in_s2' in result_df.columns: result_df['VIN_in_s2'] = pd.to_numeric(result_df['VIN_in_s2'])
+
+    # Clean up DuckDB temp spill files
+    try:
+        import shutil
+        if Path(_tmp_dir).exists():
+            shutil.rmtree(_tmp_dir, ignore_errors=True)
+    except Exception:
+        pass
+
+    # --- POST-JOIN ANNOTATION: rows skipped by skip filter ---
+    # A skipped row has VIN_in_sX=0 (looks like missing VIN) but the VIN *was* present —
+    # it was intentionally excluded by the skip filter. We annotate these rows so the
+    # export clearly shows vin_in_sX=1 and SKIPPED in all data columns.
+    skipped_vins_s1 = s1_stats.get('skipped_vins', set())
+    skipped_vins_s2 = s2_stats.get('skipped_vins', set())
+
+    # Collect all data columns (excluding vin, VIN_in_s1, VIN_in_s2, Result)
+    _data_cols = [c for c in result_df.columns if c not in ('vin', 'VIN_in_s1', 'VIN_in_s2', 'Result')]
+
+    if skipped_vins_s1:
+        # Rows where VIN was skipped by S1's filter: VIN_in_s1=0 but VIN is in s1 skipped set
+        s1_skip_mask = (result_df['VIN_in_s1'] == 0) & result_df['vin'].isin(skipped_vins_s1)
+        if s1_skip_mask.any():
+            result_df.loc[s1_skip_mask, 'VIN_in_s1'] = 1
+            # Only overwrite the S1 data columns, leave S2 columns intact
+            s1_data_cols = [c for c in _data_cols if c.startswith('s1_') or c in ('Only in S1',)]
+            for dc in s1_data_cols:
+                result_df.loc[s1_skip_mask, dc] = 'SKIPPED'
+            # Mark match columns as MISMATCH (row was excluded, so comparison is void)
+            match_cols = [c for c in _data_cols if c.endswith('_match') or c in ('vdn_match', 'sw_match', 'model_match')]
+            for mc in match_cols:
+                result_df.loc[s1_skip_mask, mc] = 'MISMATCH'
+            result_df.loc[s1_skip_mask, 'Result'] = 'NOK'
+
+    if skipped_vins_s2:
+        s2_skip_mask = (result_df['VIN_in_s2'] == 0) & result_df['vin'].isin(skipped_vins_s2)
+        if s2_skip_mask.any():
+            result_df.loc[s2_skip_mask, 'VIN_in_s2'] = 1
+            s2_data_cols = [c for c in _data_cols if c.startswith('s2_') or c in ('Only in S2',)]
+            for dc in s2_data_cols:
+                result_df.loc[s2_skip_mask, dc] = 'SKIPPED'
+            match_cols = [c for c in _data_cols if c.endswith('_match') or c in ('vdn_match', 'sw_match', 'model_match')]
+            for mc in match_cols:
+                result_df.loc[s2_skip_mask, mc] = 'MISMATCH'
+            result_df.loc[s2_skip_mask, 'Result'] = 'NOK'
 
     # Advanced logic for Python-side extraction of VDN differences (Optimized)
     # Initialize with a safe default to prevent NameError if compare_vdn is False
@@ -855,7 +974,13 @@ def main():
                 cprint("[cyan]Extracting VDN differences...[/cyan]")
                 
             def _parse_vdn_json(val):
-                return set(json.loads(val)) if isinstance(val, str) and val else set()
+                if not isinstance(val, str) or not val.strip():
+                    return set()
+                try:
+                    res = json.loads(val)
+                    return set(res) if isinstance(res, list) else set()
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    return set()
                 
             mismatched_s1 = result_df.loc[mismatch_indices, 's1_vdns_json']
             mismatched_s2 = result_df.loc[mismatch_indices, 's2_vdns_json']
@@ -867,16 +992,25 @@ def main():
             only_in_s = [s - t for s, t in zip(s_sets, t_sets)]
             
             result_df.loc[mismatch_indices, 'Only in S1'] = [
-                'NO DATA' if len(s) == 0 else (", ".join(sorted(x)) if x else "")
-                for s, x in zip(s_sets, only_in_s)
+                'SKIPPED' if orig == 'SKIPPED' else ('NO DATA' if len(s) == 0 else (", ".join(sorted(x)) if x else ""))
+                for s, x, orig in zip(s_sets, only_in_s, mismatched_s1)
             ]
             result_df.loc[mismatch_indices, 'Only in S2'] = [
-                'NO DATA' if len(t) == 0 else (", ".join(sorted(x)) if x else "")
-                for t, x in zip(t_sets, only_in_t)
+                'SKIPPED' if orig == 'SKIPPED' else ('NO DATA' if len(t) == 0 else (", ".join(sorted(x)) if x else ""))
+                for t, x, orig in zip(t_sets, only_in_t, mismatched_s2)
             ]
             
             # Compute detailed tallies ONLY for true discrepancies where VIN exists in both
-            for idx, vin, s_diff, t_diff, s_set, t_set in zip(mismatch_indices, result_df.loc[mismatch_indices, 'vin'], only_in_s, only_in_t, s_sets, t_sets):
+            for idx, vin, s_diff, t_diff, s_set, t_set, orig_s, orig_t in zip(
+                mismatch_indices, 
+                result_df.loc[mismatch_indices, 'vin'], 
+                only_in_s, 
+                only_in_t, 
+                s_sets, 
+                t_sets,
+                mismatched_s1,
+                mismatched_s2
+            ):
                 if result_df.at[idx, 'VIN_in_s1'] == 0 or result_df.at[idx, 'VIN_in_s2'] == 0:
                     continue
                 
@@ -890,16 +1024,16 @@ def main():
                     s_list = sorted(s_groups.get(pref, []))
                     t_list = sorted(t_groups.get(pref, []))
                     for i in range(max(len(s_list), len(t_list))):
-                        # Distinguish between "NO DATA" (empty list) and "No Match" (missing specific code)
-                        sv = s_list[i] if i < len(s_list) else ("NO DATA" if not s_set else "No Match")
-                        tv = t_list[i] if i < len(t_list) else ("NO DATA" if not t_set else "No Match")
+                        # Distinguish between "SKIPPED", "NO DATA" (empty list) and "No Match" (missing specific code)
+                        sv = s_list[i] if i < len(s_list) else ("SKIPPED" if orig_s == "SKIPPED" else ("NO DATA" if not s_set else "No Match"))
+                        tv = t_list[i] if i < len(t_list) else ("SKIPPED" if orig_t == "SKIPPED" else ("NO DATA" if not t_set else "No Match"))
                         vdn_diff_pairs.append((vin, sv, tv))
         
         # Create VDN Tally DataFrame
         vdn_tally_df = pd.DataFrame(vdn_diff_pairs, columns=['VIN', 'VDN in S1', 'VDN in S2'])
         if not vdn_tally_df.empty:
-            # We separate "NO DATA" (empty list) from "No Match" (missing specific code)
-            sentinels = ['NO DATA', 'No Match']
+            # We separate "SKIPPED", "NO DATA" (empty list) from "No Match" (missing specific code)
+            sentinels = ['SKIPPED', 'NO DATA', 'No Match']
             none_in_s = vdn_tally_df[vdn_tally_df['VDN in S1'].isin(sentinels)]
             none_in_t = vdn_tally_df[vdn_tally_df['VDN in S2'].isin(sentinels)]
             both_codes = vdn_tally_df[~vdn_tally_df['VDN in S1'].isin(sentinels) & ~vdn_tally_df['VDN in S2'].isin(sentinels)]
@@ -1045,7 +1179,10 @@ def main():
         summary_lines_console.append("-" * 40)
         for label in ['s1', 's2']:
             res = audit_results[label]
+            other_label = 's2' if label == 's1' else 's1'
+            other_res = audit_results[other_label]
             l_disp = "Source 1" if label == 's1' else "Source 2"
+            other_disp = "Source 2" if label == 's1' else "Source 1"
             
             if res['skip_stats']:
                 details = []
@@ -1053,6 +1190,14 @@ def main():
                     val_str = ", ".join(f"{v}({count})" for v, count in vals.items())
                     details.append(f"{col}[{val_str}]")
                 summary_lines_console.append(f"Skipped Rows in {l_disp} (Filters: {'; '.join(details)}):")
+
+            # Cross-reference: VINs in THIS source that appear as SKIPPED because OTHER source's filter removed them
+            other_skipped = other_res.get('skipped_vins', set())
+            if other_skipped and other_res.get('skip_stats'):
+                summary_lines_console.append(
+                    f"  [Note] {len(other_skipped)} VIN(s) in {l_disp} show as SKIPPED because "
+                    f"they were excluded by {other_disp}'s skip filter."
+                )
 
             if res['norm_stats']:
                 details = []
@@ -1366,7 +1511,10 @@ def main():
                 if is_html: summary_lines.append("<ul>")
                 for label in ['s1', 's2']:
                     res = audit_results[label]
+                    other_label = 's2' if label == 's1' else 's1'
+                    other_res = audit_results[other_label]
                     l_disp = "Source 1" if label == 's1' else "Source 2"
+                    other_disp = "Source 2" if label == 's1' else "Source 1"
                     
                     if res['skip_stats']:
                         details = []
@@ -1378,6 +1526,16 @@ def main():
                             summary_lines.append(f"<li><b>Skipped Rows in {l_disp}</b> (Filters: {breakdown})</li>")
                         else:
                             summary_lines.append(f"- **Skipped Rows in {l_disp}** (Filters: {breakdown})")
+
+                    # Cross-reference: other source's skip filter impact on this source
+                    other_skipped = other_res.get('skipped_vins', set())
+                    if other_skipped and other_res.get('skip_stats'):
+                        note = (f"{len(other_skipped)} VIN(s) in {l_disp} show as SKIPPED "
+                                f"because they were excluded by {other_disp}'s skip filter.")
+                        if is_html:
+                            summary_lines.append(f"<li><i>Note: {note}</i></li>")
+                        else:
+                            summary_lines.append(f"  - *Note: {note}*")
 
                     if res['norm_stats']:
                         details = []
@@ -1479,13 +1637,23 @@ def main():
             ])
             for label in ['s1', 's2']:
                 res = audit_results[label]
+                other_label = 's2' if label == 's1' else 's1'
+                other_res = audit_results[other_label]
                 l_disp = "Source 1" if label == 's1' else "Source 2"
+                other_disp = "Source 2" if label == 's1' else "Source 1"
                 if res['skip_stats']:
                     details = []
                     for col, vals in res['skip_stats'].items():
                         val_str = ", ".join(f"{v}({count})" for v, count in vals.items())
                         details.append(f"{col}[{val_str}]")
                     summary_lines.append(f"Skipped Rows in {l_disp} (Filters: {'; '.join(details)})")
+                # Cross-reference: other source's skip filter impact
+                other_skipped = other_res.get('skipped_vins', set())
+                if other_skipped and other_res.get('skip_stats'):
+                    summary_lines.append(
+                        f"  [Note] {len(other_skipped)} VIN(s) in {l_disp} show as SKIPPED "
+                        f"because they were excluded by {other_disp}'s skip filter."
+                    )
                 if res['norm_stats']:
                     details = []
                     for col, mappings in res['norm_stats'].items():

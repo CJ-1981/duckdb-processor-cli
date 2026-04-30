@@ -18,21 +18,21 @@
     "samples": "10",
     "sort_vin": "asc",
     "use_default_input": true,
-    "source1": "C:/Users/Chimin.Jung/OneDrive - Lotus Tech Innovation Centre GmbH/Documents/Obsidian Vault/scripts/duckdb-processor-cli/util/vdn-compare/input/20260427/ALL_regions_20260427_073000.xlsx",
-    "source2": "C:/Users/Chimin.Jung/OneDrive - Lotus Tech Innovation Centre GmbH/Documents/Obsidian Vault/scripts/duckdb-processor-cli/util/vdn-compare/input/20260427/VDN_SW-comparison_DB-export_20260428.xlsx",
+    "source1": "C:/Users/Chimin.Jung/OneDrive - Lotus Tech Innovation Centre GmbH/Documents/Obsidian Vault/scripts/duckdb-processor-cli/util/vdn-compare/input/20260427/VDN_SW-comparison_DB-export_20260429.xlsx",
+    "source2": "C:/Users/Chimin.Jung/OneDrive - Lotus Tech Innovation Centre GmbH/Documents/Obsidian Vault/scripts/duckdb-processor-cli/util/vdn-compare/input/20260427/EX30_VDN_list_report_20260427.csv",
     "s1_map": {
         "vin": "VIN",
         "DB_SW": "CONSUMER_SW_VERSION",
-        "currentVdn": "VDN_LIST",
+        "mergedVDN": "VDN_LIST",
         "model": "MODEL",
         "region": "REGION"
     },
     "s2_map": {
-        "vin": "VIN",
-        "DB_SW": "CONSUMER_SW_VERSION",
-        "currentVdn": "VDN_LIST",
-        "model": "MODEL",
-        "region": "REGION"
+        "VIN": "VIN",
+        "CONSUMER_SW_VERSION": "CONSUMER_SW_VERSION",
+        "VDN_LIST": "VDN_LIST",
+        "MODEL": "MODEL",
+        "REGION": "REGION"
     },
     "skip_nodata": false,
     "normalize_custom": {},
@@ -67,7 +67,9 @@
             "L6TEY2E2XRZ000201",
             "YV4EK3ZL3SS007673",
             "YV12ZEL95RS000254",
-            "YV12ZEL9XRS000248"
+            "YV12ZEL9XRS000248",
+            "LYV2LEKEXRS000352",
+            "L6TEY2E28RZ000066"
         ]
     },
     "vdn_ignore": [
