@@ -99,6 +99,9 @@ class VDNCompareGUI:
         for role in self.initial_roles:
             self.add_role_vars(role)
 
+        # Augmentations storage: list of dicts
+        self.augmentations = []
+
         # Output Formats storage
         self.format_options = ["rich", "md", "html", "csv"]
         self.format_vars = {fmt: tk.BooleanVar(value=True) for fmt in self.format_options}
@@ -143,22 +146,38 @@ class VDNCompareGUI:
         ttk.Button(self.main_frame, text="Browse", command=lambda: self.browse_file(self.s1_var)).grid(row=0, column=2, padx=5, pady=5)
         add_tooltip(lbl_s1, "The first data file (e.g., DB.csv). Serves as the primary reference for comparison.")
 
+        # Source 1 Name
+        lbl_s1_name = ttk.Label(self.main_frame, text="Source 1 Name:")
+        lbl_s1_name.grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.s1_name_var = tk.StringVar(value="Source 1")
+        ent_s1_name = ttk.Entry(self.main_frame, textvariable=self.s1_name_var, width=50)
+        ent_s1_name.grid(row=1, column=1, pady=5)
+        add_tooltip(lbl_s1_name, "Custom descriptive name for Source 1 (e.g., 'Production'). Used in reports.")
+
         # Source 2
         lbl_s2 = ttk.Label(self.main_frame, text="Source 2 File:")
-        lbl_s2.grid(row=1, column=0, sticky=tk.W, pady=5)
+        lbl_s2.grid(row=2, column=0, sticky=tk.W, pady=5)
         self.s2_var = tk.StringVar(value="input/PIE.csv")
         ent_s2 = ttk.Entry(self.main_frame, textvariable=self.s2_var, width=50)
-        ent_s2.grid(row=1, column=1, pady=5)
-        ttk.Button(self.main_frame, text="Browse", command=lambda: self.browse_file(self.s2_var)).grid(row=1, column=2, padx=5, pady=5)
+        ent_s2.grid(row=2, column=1, pady=5)
+        ttk.Button(self.main_frame, text="Browse", command=lambda: self.browse_file(self.s2_var)).grid(row=2, column=2, padx=5, pady=5)
         add_tooltip(lbl_s2, "The second data file (e.g., PIE.csv) to compare against Source 1.")
+
+        # Source 2 Name
+        lbl_s2_name = ttk.Label(self.main_frame, text="Source 2 Name:")
+        lbl_s2_name.grid(row=3, column=0, sticky=tk.W, pady=5)
+        self.s2_name_var = tk.StringVar(value="Source 2")
+        ent_s2_name = ttk.Entry(self.main_frame, textvariable=self.s2_name_var, width=50)
+        ent_s2_name.grid(row=3, column=1, pady=5)
+        add_tooltip(lbl_s2_name, "Custom descriptive name for Source 2 (e.g., 'Staging'). Used in reports.")
 
         # Config File
         lbl_cfg = ttk.Label(self.main_frame, text="Config File:")
-        lbl_cfg.grid(row=2, column=0, sticky=tk.W, pady=5)
+        lbl_cfg.grid(row=4, column=0, sticky=tk.W, pady=5)
         self.config_var = tk.StringVar(value="config.json")
         ent_cfg = ttk.Entry(self.main_frame, textvariable=self.config_var, width=50)
-        ent_cfg.grid(row=2, column=1, pady=5)
-        ttk.Button(self.main_frame, text="Browse", command=lambda: self.browse_file(self.config_var)).grid(row=2, column=2, padx=5, pady=5)
+        ent_cfg.grid(row=4, column=1, pady=5)
+        ttk.Button(self.main_frame, text="Browse", command=lambda: self.browse_file(self.config_var)).grid(row=4, column=2, padx=5, pady=5)
         add_tooltip(lbl_cfg, "Path to a JSON file for custom configuration and column mapping.")
 
         # Hidden Compare Columns variable (synced from Column Settings tab)
@@ -166,18 +185,18 @@ class VDNCompareGUI:
 
         # Sort VIN
         lbl_sort = ttk.Label(self.main_frame, text="Sort VIN:")
-        lbl_sort.grid(row=3, column=0, sticky=tk.W, pady=5)
+        lbl_sort.grid(row=5, column=0, sticky=tk.W, pady=5)
         self.sort_vin_var = tk.StringVar(value="asc")
         sort_cb = ttk.Combobox(self.main_frame, textvariable=self.sort_vin_var, values=("none", "asc", "desc"), state="readonly", width=47)
-        sort_cb.grid(row=3, column=1, pady=5)
+        sort_cb.grid(row=5, column=1, pady=5)
         add_tooltip(lbl_sort, "Sort the output records by VIN (none respects input order).")
 
         # Formats
         lbl_fmt = ttk.Label(self.main_frame, text="Formats:")
-        lbl_fmt.grid(row=4, column=0, sticky=tk.W, pady=5)
+        lbl_fmt.grid(row=6, column=0, sticky=tk.W, pady=5)
         
         fmt_frame = ttk.Frame(self.main_frame)
-        fmt_frame.grid(row=4, column=1, sticky=tk.W, pady=5)
+        fmt_frame.grid(row=6, column=1, sticky=tk.W, pady=5)
         
         for fmt in self.format_options:
             cb = ttk.Checkbutton(fmt_frame, text=fmt.upper(), variable=self.format_vars[fmt])
@@ -187,56 +206,56 @@ class VDNCompareGUI:
 
         # Samples
         lbl_samp = ttk.Label(self.main_frame, text="Samples:")
-        lbl_samp.grid(row=5, column=0, sticky=tk.W, pady=5)
+        lbl_samp.grid(row=7, column=0, sticky=tk.W, pady=5)
         self.samples_var = tk.StringVar(value="10")
         ent_samp = ttk.Entry(self.main_frame, textvariable=self.samples_var, width=50)
-        ent_samp.grid(row=5, column=1, pady=5)
-        ttk.Label(self.main_frame, text="(integer or 'all')").grid(row=5, column=2, sticky=tk.W, pady=5)
+        ent_samp.grid(row=7, column=1, pady=5)
+        ttk.Label(self.main_frame, text="(integer or 'all')").grid(row=7, column=2, sticky=tk.W, pady=5)
         add_tooltip(lbl_samp, "Number of samples to show in the summary report (integer or 'all').")
 
         # Normalize Models
         lbl_nm = ttk.Label(self.main_frame, text="Normalize Models:")
-        lbl_nm.grid(row=6, column=0, sticky=tk.W, pady=5)
+        lbl_nm.grid(row=8, column=0, sticky=tk.W, pady=5)
         self.norm_models_var = tk.StringVar(value='"EX30,V216" "EX30 CC,V216-CC"')
         ent_nm = ttk.Entry(self.main_frame, textvariable=self.norm_models_var, width=50)
-        ent_nm.grid(row=6, column=1, pady=5)
+        ent_nm.grid(row=8, column=1, pady=5)
         add_tooltip(lbl_nm, 'Groups of equivalent models, space-separated groupings.\nUse comma inside groups. e.g. "EX30,V216" "PS4,P417"\nThe first item becomes the primary display name.')
         
         # Normalize SW
         lbl_nsw = ttk.Label(self.main_frame, text="Normalize SW:")
-        lbl_nsw.grid(row=7, column=0, sticky=tk.W, pady=5)
+        lbl_nsw.grid(row=9, column=0, sticky=tk.W, pady=5)
         self.norm_sw_var = tk.StringVar(value='"MY27 J1,27 J1"')
         ent_nsw = ttk.Entry(self.main_frame, textvariable=self.norm_sw_var, width=50)
-        ent_nsw.grid(row=7, column=1, pady=5)
+        ent_nsw.grid(row=9, column=1, pady=5)
         add_tooltip(lbl_nsw, 'Groups of equivalent SW versions. Use quotes if spaces exist within group names.\nExample: "MY27 J1,27 J1" "1.8.0,1.8.0-hotfix"')
         
         # Normalize Custom
         lbl_nc = ttk.Label(self.main_frame, text="Normalize Custom JSON:")
-        lbl_nc.grid(row=8, column=0, sticky=tk.W, pady=5)
-        self.norm_custom_var = tk.StringVar(value="{}")
-        ent_nc = ttk.Entry(self.main_frame, textvariable=self.norm_custom_var, width=50)
-        ent_nc.grid(row=8, column=1, pady=5)
+        lbl_nc.grid(row=10, column=0, sticky=tk.NW, pady=5)
+        self.norm_custom_text = tk.Text(self.main_frame, height=3, width=50, undo=True)
+        self.norm_custom_text.grid(row=10, column=1, pady=5, sticky=tk.EW)
+        self.norm_custom_text.insert(tk.END, "{}")
         add_tooltip(lbl_nc, 'Custom normalization rules in JSON mapping column names to lists of equivalent groups.')
 
         # Skip Filter
         lbl_sf = ttk.Label(self.main_frame, text="Skip Filter JSON:")
-        lbl_sf.grid(row=9, column=0, sticky=tk.W, pady=5)
-        self.skip_filter_var = tk.StringVar(value="{}")
-        ent_sf = ttk.Entry(self.main_frame, textvariable=self.skip_filter_var, width=50)
-        ent_sf.grid(row=9, column=1, pady=5)
+        lbl_sf.grid(row=11, column=0, sticky=tk.NW, pady=5)
+        self.skip_filter_text = tk.Text(self.main_frame, height=3, width=50, undo=True)
+        self.skip_filter_text.grid(row=11, column=1, pady=5, sticky=tk.EW)
+        self.skip_filter_text.insert(tk.END, "{}")
         add_tooltip(lbl_sf, 'Values to skip/exclude, in JSON format: {"ColumnName": ["Value1", "Value2"]}.')
         
         # VDN Ignore
         lbl_vi = ttk.Label(self.main_frame, text="VDN Ignore List:")
-        lbl_vi.grid(row=10, column=0, sticky=tk.W, pady=5)
+        lbl_vi.grid(row=12, column=0, sticky=tk.W, pady=5)
         self.vdn_ignore_var = tk.StringVar(value="")
         ent_vi = ttk.Entry(self.main_frame, textvariable=self.vdn_ignore_var, width=50)
-        ent_vi.grid(row=10, column=1, pady=5)
+        ent_vi.grid(row=12, column=1, pady=5)
         add_tooltip(lbl_vi, 'Space-separated 4-character VDN codes to ignore (e.g. "9T00 FALS"). Supports wildcards like "ME*".')
 
         # Checkboxes for flags
         flags_frame = ttk.Frame(self.main_frame)
-        flags_frame.grid(row=11, column=0, columnspan=3, sticky=tk.W, pady=5)
+        flags_frame.grid(row=13, column=0, columnspan=3, sticky=tk.W, pady=5)
         
         self.skip_nodata_var = tk.BooleanVar(value=True)
         cb_nodata = ttk.Checkbutton(flags_frame, text="Skip Rows with No Data", variable=self.skip_nodata_var)
@@ -245,18 +264,18 @@ class VDNCompareGUI:
 
         # Run & Save Buttons
         btn_frame = ttk.Frame(self.main_frame)
-        btn_frame.grid(row=12, column=0, columnspan=3, pady=10)
+        btn_frame.grid(row=14, column=0, columnspan=3, pady=10)
         
         self.run_btn = ttk.Button(btn_frame, text="Run Comparison", command=self.run_script)
         self.run_btn.pack(side=tk.LEFT, padx=5)
         
-        self.save_btn = ttk.Button(btn_frame, text="Save to config.json", command=self.save_full_config)
+        self.save_btn = ttk.Button(btn_frame, text="Save to config.json", command=lambda: self.save_full_config(show_msg=True))
         self.save_btn.pack(side=tk.LEFT, padx=5)
 
         # Output text area
         output_frame = ttk.Frame(self.main_frame)
-        output_frame.grid(row=13, column=0, columnspan=3, pady=5, sticky=(tk.W, tk.E, tk.N, tk.S))
-        self.main_frame.rowconfigure(13, weight=1)
+        output_frame.grid(row=15, column=0, columnspan=3, pady=5, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.main_frame.rowconfigure(15, weight=1)
         self.main_frame.columnconfigure(1, weight=1)
 
         self.output_text = tk.Text(output_frame, height=12, width=75, wrap=tk.WORD)
@@ -301,10 +320,34 @@ class VDNCompareGUI:
         
         ttk.Button(self.btn_area, text="Add Custom Role", command=self.add_custom_role).pack(side=tk.LEFT, padx=5)
         ttk.Button(self.btn_area, text="Refresh Headers", command=self.refresh_all_headers).pack(side=tk.LEFT, padx=5)
-        ttk.Button(self.btn_area, text="Save to config.json", command=self.save_full_config).pack(side=tk.LEFT, padx=5)
+        ttk.Button(self.btn_area, text="Save to config.json", command=lambda: self.save_full_config(show_msg=True)).pack(side=tk.LEFT, padx=5)
+
+        # --- Augmentations Section ---
+        ttk.Separator(self.col_frame, orient=tk.HORIZONTAL).grid(row=3, column=0, columnspan=4, sticky=tk.EW, pady=20)
+        
+        aug_header_frame = ttk.Frame(self.col_frame)
+        aug_header_frame.grid(row=4, column=0, columnspan=4, sticky=tk.W, pady=(0, 5))
+        ttk.Label(aug_header_frame, text="Column Augmentations:", font=("", 10, "bold")).pack(side=tk.LEFT)
+        ttk.Button(aug_header_frame, text="Add Augmentation", command=self.add_augmentation).pack(side=tk.LEFT, padx=20)
+
+        # Scrollable area for Augmentations
+        aug_outer = ttk.Frame(self.col_frame)
+        aug_outer.grid(row=5, column=0, columnspan=4, sticky=tk.NSEW)
+        self.col_frame.rowconfigure(5, weight=1)
+
+        self.aug_canvas = tk.Canvas(aug_outer, height=150)
+        aug_scroll = ttk.Scrollbar(aug_outer, orient=tk.VERTICAL, command=self.aug_canvas.yview)
+        self.aug_grid_frame = ttk.Frame(self.aug_canvas)
+        
+        self.aug_grid_frame.bind("<Configure>", lambda e: self.aug_canvas.configure(scrollregion=self.aug_canvas.bbox("all")))
+        self.aug_canvas.create_window((0, 0), window=self.aug_grid_frame, anchor="nw")
+        self.aug_canvas.configure(yscrollcommand=aug_scroll.set)
+        
+        self.aug_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        aug_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         ttk.Label(self.col_frame, text="* VIN is required for joining files.\nColumns marked 'Compare?' are automatically used for comparison.", 
-                  font=("", 8, "italic"), justify=tk.LEFT).grid(row=3, column=0, columnspan=4, sticky=tk.W, pady=10)
+                  font=("", 8, "italic"), justify=tk.LEFT).grid(row=7, column=0, columnspan=4, sticky=tk.W, pady=10)
 
     def render_mapping_rows(self):
         # Clear existing rows in grid frame
@@ -317,6 +360,9 @@ class VDNCompareGUI:
         ttk.Label(self.mapping_grid_frame, text="Source 2 Column", font=("", 9, "bold")).grid(row=0, column=2, sticky=tk.W, padx=5, pady=(0, 5))
         ttk.Label(self.mapping_grid_frame, text="Compare?", font=("", 9, "bold")).grid(row=0, column=3, sticky=tk.W, padx=5, pady=(0, 5))
 
+        # Collect all augmented names to include in dropdowns
+        aug_names = sorted(list(set([a.get('name', '').upper() for a in self.augmentations if a.get('name')])))
+        
         self.combos = {}
         row_idx = 1
         for role_id in self.mapping_vars.keys():
@@ -325,11 +371,11 @@ class VDNCompareGUI:
             
             c1 = ttk.Combobox(self.mapping_grid_frame, textvariable=self.mapping_vars[role_id]["s1"], width=25)
             c1.grid(row=row_idx, column=1, padx=5, pady=2)
-            c1['values'] = self.s1_headers
+            c1['values'] = sorted(list(set(self.s1_headers + aug_names)))
             
             c2 = ttk.Combobox(self.mapping_grid_frame, textvariable=self.mapping_vars[role_id]["s2"], width=25)
             c2.grid(row=row_idx, column=2, padx=5, pady=2)
-            c2['values'] = self.s2_headers
+            c2['values'] = sorted(list(set(self.s2_headers + aug_names)))
             
             self.combos[role_id] = (c1, c2)
 
@@ -360,6 +406,183 @@ class VDNCompareGUI:
                 messagebox.showwarning("Invalid Name", "Role name must be unique and not empty.")
 
         ttk.Button(dialog, text="OK", command=confirm).pack(pady=10)
+
+    def _clean_augmentations(self):
+        """Return a serializable copy of augmentations with all tk.Variables resolved."""
+        clean = []
+        for aug in self.augmentations:
+            item = {}
+            for k, v in aug.items():
+                if k == 'compare_var':
+                    continue  # always drop the Tkinter variable itself
+                elif isinstance(v, tk.Variable):
+                    item[k] = v.get()  # resolve BooleanVar / StringVar / IntVar
+                else:
+                    item[k] = v
+            clean.append(item)
+        return clean
+
+    def render_augmentation_rows(self):
+        # Clear existing rows
+        for widget in self.aug_grid_frame.winfo_children():
+            widget.destroy()
+        
+        if not self.augmentations:
+            ttk.Label(self.aug_grid_frame, text="No augmentations defined. Click 'Add Augmentation' to start.", 
+                      font=("", 9, "italic")).grid(row=0, column=0, columnspan=5, pady=20)
+            return
+
+        # Headers
+        ttk.Label(self.aug_grid_frame, text="Name", font=("", 9, "bold")).grid(row=0, column=0, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self.aug_grid_frame, text="Compare?", font=("", 9, "bold")).grid(row=0, column=1, padx=10, pady=5)
+        ttk.Label(self.aug_grid_frame, text="Rule Summary", font=("", 9, "bold")).grid(row=0, column=2, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self.aug_grid_frame, text="Actions", font=("", 9, "bold")).grid(row=0, column=3, columnspan=2, padx=10, pady=5)
+
+        for i, aug in enumerate(self.augmentations):
+            row_idx = i + 1
+            
+            # Name
+            ttk.Label(self.aug_grid_frame, text=aug.get('name', 'UNKNOWN')).grid(row=row_idx, column=0, sticky=tk.W, padx=10, pady=2)
+            
+            # Compare Checkbox
+            if 'compare_var' not in aug or not isinstance(aug['compare_var'], tk.BooleanVar):
+                aug['compare_var'] = tk.BooleanVar(value=aug.get('compare', True))
+            
+            cb = ttk.Checkbutton(self.aug_grid_frame, variable=aug['compare_var'])
+            cb.grid(row=row_idx, column=1, padx=10, pady=2)
+            
+            # Rule Summary
+            indices = f"[{aug.get('start')}:{aug.get('length')}]" if aug.get('length') else f"[{aug.get('start')}:]"
+            cond = f" if {aug.get('condition_col')}" if aug.get('condition_col') else ""
+            summary = f"from {aug.get('source')}{indices}{cond}"
+            ttk.Label(self.aug_grid_frame, text=summary, font=("", 8)).grid(row=row_idx, column=2, sticky=tk.W, padx=10, pady=2)
+            
+            # Buttons
+            ttk.Button(self.aug_grid_frame, text="Edit", width=8, command=lambda idx=i: self.edit_augmentation(idx)).grid(row=row_idx, column=3, padx=2, pady=2)
+            ttk.Button(self.aug_grid_frame, text="Remove", width=8, command=lambda idx=i: self.remove_augmentation(idx)).grid(row=row_idx, column=4, padx=2, pady=2)
+
+    def add_augmentation(self):
+        self._open_aug_dialog()
+
+    def edit_augmentation(self, index):
+        self._open_aug_dialog(index)
+
+    def remove_augmentation(self, index):
+        if messagebox.askyesno("Confirm", f"Remove augmentation '{self.augmentations[index].get('name')}'?"):
+            del self.augmentations[index]
+            self.render_augmentation_rows()
+
+    def _open_aug_dialog(self, edit_index=None):
+        is_edit = edit_index is not None
+        aug_data = self.augmentations[edit_index] if is_edit else {}
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Edit Augmentation" if is_edit else "Add Column Augmentation")
+        dialog.geometry("450x650")
+        
+        main_form = ttk.Frame(dialog, padding=10)
+        main_form.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_form, text="New Column Name:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        name_var = tk.StringVar(value=aug_data.get('name', ''))
+        ttk.Entry(main_form, textvariable=name_var).grid(row=0, column=1, sticky=tk.EW, pady=5)
+        
+        ttk.Label(main_form, text="Source Column (e.g. VIN):").grid(row=1, column=0, sticky=tk.W, pady=5)
+        source_var = tk.StringVar(value=aug_data.get('source', ''))
+        
+        # Include internal roles + raw headers
+        roles = sorted(list(set([r.upper() for r in self.roles.values()])))
+        headers = sorted(list(set(self.s1_headers + self.s2_headers)))
+        source_values = roles + ["--- RAW HEADERS ---"] + headers
+        
+        source_cb = ttk.Combobox(main_form, textvariable=source_var, values=source_values)
+        source_cb.grid(row=1, column=1, sticky=tk.EW, pady=5)
+        
+        ttk.Label(main_form, text="Start Index (starts from 0):").grid(row=2, column=0, sticky=tk.W, pady=5)
+        start_var = tk.IntVar(value=aug_data.get('start', 0))
+        ttk.Spinbox(main_form, from_=0, to=1000, textvariable=start_var).grid(row=2, column=1, sticky=tk.EW, pady=5)
+        
+        ttk.Label(main_form, text="Length:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        length_var = tk.IntVar(value=aug_data.get('length', 1))
+        ttk.Spinbox(main_form, from_=1, to=1000, textvariable=length_var).grid(row=3, column=1, sticky=tk.EW, pady=5)
+        
+        ttk.Label(main_form, text="Condition Col (Optional):").grid(row=4, column=0, sticky=tk.W, pady=5)
+        cond_var = tk.StringVar(value=aug_data.get('condition_col', ''))
+        cond_cb = ttk.Combobox(main_form, textvariable=cond_var, values=source_values)
+        cond_cb.grid(row=4, column=1, sticky=tk.EW, pady=5)
+
+        ttk.Label(main_form, text="Default Value:").grid(row=5, column=0, sticky=tk.W, pady=5)
+        default_var = tk.StringVar(value=aug_data.get('default', 'Unknown'))
+        ttk.Entry(main_form, textvariable=default_var).grid(row=5, column=1, sticky=tk.EW, pady=5)
+
+        compare_var = tk.BooleanVar(value=aug_data.get('compare', True))
+        ttk.Checkbutton(main_form, text="Include in Comparison", variable=compare_var).grid(row=6, column=1, sticky=tk.W, pady=5)
+        
+        lookup_lbl = ttk.Label(main_form, text="Lookup Table:")
+        lookup_lbl.grid(row=7, column=0, sticky=tk.NW, pady=5)
+        lookup_text = tk.Text(main_form, height=10, width=30)
+        lookup_text.grid(row=7, column=1, sticky=tk.NSEW, pady=5)
+        
+        # Pre-fill lookup text
+        if is_edit:
+            if "conditional_lookups" in aug_data:
+                lookup_text.insert(tk.END, json.dumps(aug_data["conditional_lookups"], indent=4))
+            else:
+                flat_lines = [f"{k}:{v}" for k, v in aug_data.get('lookup', {}).items()]
+                lookup_text.insert(tk.END, "\n".join(flat_lines))
+
+        help_text = "Format: 'Key:Value' per line.\nIf Condition is set, use JSON:\n{\"VOLVO\": {\"R\": \"Ghent\"}, \"PS4\": {\"R\": \"Chengdu\"}}\nSupports comma-separated keys: \"PS4, P417\""
+        ttk.Label(main_form, text=help_text, font=("", 8, "italic"), justify=tk.LEFT).grid(row=8, column=1, sticky=tk.W, pady=(0, 10))
+
+        def save():
+            name = name_var.get().strip().upper()
+            source = source_var.get().strip()
+            condition = cond_var.get().strip()
+            if not name or not source:
+                messagebox.showerror("Error", "Name and Source are required.")
+                return
+            
+            aug = {
+                "name": name,
+                "source": source,
+                "start": start_var.get(),
+                "length": length_var.get(),
+                "default": default_var.get(),
+                "condition_col": condition if condition else None,
+                "compare": compare_var.get()
+            }
+
+            raw_lookup = lookup_text.get(1.0, tk.END).strip()
+            if condition and (raw_lookup.startswith("{") or raw_lookup.startswith("[")):
+                try:
+                    aug["conditional_lookups"] = json.loads(raw_lookup)
+                except Exception as e:
+                    messagebox.showerror("JSON Error", f"Failed to parse conditional lookup JSON: {e}")
+                    return
+            else:
+                # Parse flat lookup
+                lookup = {}
+                for line in raw_lookup.splitlines():
+                    if ':' in line:
+                        k, v = line.split(':', 1)
+                        lookup[k.strip()] = v.strip()
+                aug["lookup"] = lookup
+            
+            if is_edit:
+                # Preserve the BooleanVar if it exists
+                if 'compare_var' in self.augmentations[edit_index]:
+                    aug['compare_var'] = self.augmentations[edit_index]['compare_var']
+                    aug['compare_var'].set(aug['compare'])
+                self.augmentations[edit_index] = aug
+            else:
+                self.augmentations.append(aug)
+                
+            self.render_augmentation_rows()
+            dialog.destroy()
+            
+        ttk.Button(main_form, text="Update" if is_edit else "Save", command=save).grid(row=9, column=0, columnspan=2, pady=10)
+        main_form.columnconfigure(1, weight=1)
+        main_form.rowconfigure(7, weight=1)
 
     def on_file_change(self, source_key):
         path = self.s1_var.get() if source_key == "s1" else self.s2_var.get()
@@ -455,12 +678,15 @@ class VDNCompareGUI:
             "use_default_input": True, 
             "source1": self.s1_var.get(),
             "source2": self.s2_var.get(),
+            "s1_name": self.s1_name_var.get(),
+            "s2_name": self.s2_name_var.get(),
             "s1_map": s1_map,
             "s2_map": s2_map,
             "skip_nodata": self.skip_nodata_var.get(),
             "normalize_custom": json.loads(self.norm_custom_var.get()) if self.norm_custom_var.get().strip() != "{}" else {},
             "skip_filter": json.loads(self.skip_filter_var.get()) if self.skip_filter_var.get().strip() != "{}" else {},
-            "vdn_ignore": [v.strip().strip('"').strip("'") for v in self.vdn_ignore_var.get().split() if v.strip()]
+            "vdn_ignore": [v.strip().strip('"').strip("'") for v in self.vdn_ignore_var.get().split() if v.strip()],
+            "augment": self.augmentations
         }
         
         try:
@@ -499,6 +725,8 @@ class VDNCompareGUI:
         cmd.extend([
             "-s1", self.s1_var.get(),
             "-s2", self.s2_var.get(),
+            "--s1-name", self.s1_name_var.get(),
+            "--s2-name", self.s2_name_var.get(),
             "--config", self.config_var.get(),
             "--compare"
         ])
@@ -518,15 +746,20 @@ class VDNCompareGUI:
             cmd.extend(["--normalize-sw"])
             cmd.extend(shlex.split(self.norm_sw_var.get().strip()))
             
-        if self.norm_custom_var.get().strip():
-            cmd.extend(["--normalize-custom", self.norm_custom_var.get().strip()])
+        norm_custom_raw = self.norm_custom_text.get("1.0", tk.END).strip()
+        if norm_custom_raw and norm_custom_raw != "{}":
+            cmd.extend(["--normalize-custom", norm_custom_raw])
             
-        if self.skip_filter_var.get().strip():
-            cmd.extend(["--skip-filter", self.skip_filter_var.get().strip()])
+        skip_filter_raw = self.skip_filter_text.get("1.0", tk.END).strip()
+        if skip_filter_raw and skip_filter_raw != "{}":
+            cmd.extend(["--skip-filter", skip_filter_raw])
             
         if self.vdn_ignore_var.get().strip():
             cmd.extend(["--vdn-ignore"])
             cmd.extend(self.vdn_ignore_var.get().split())
+
+        if self.augmentations:
+            cmd.extend(["--augment", json.dumps(self._clean_augmentations())])
 
         # Always add --use-default-input so the CLI doesn't pop up its own file dialog
         cmd.append("--use-default-input")
@@ -596,13 +829,20 @@ class VDNCompareGUI:
                 for fmt in self.format_options:
                     self.format_vars[fmt].set(fmt in saved_fmts)
             
-            # Source paths
+            # Source paths & names
             if "source1" in config: self.s1_var.set(config["source1"])
             if "source2" in config: self.s2_var.set(config["source2"])
+            if "s1_name" in config: self.s1_name_var.set(config["s1_name"])
+            if "s2_name" in config: self.s2_name_var.set(config["s2_name"])
             
             # Main settings
             if "samples" in config: self.samples_var.set(str(config["samples"]))
-            if "sort_vin" in config: self.sort_vin_var.set(config["sort_vin"])
+            if "sort_vin" in config:
+                sv_val = str(config["sort_vin"]).lower()
+                if sv_val in ("none", "asc", "desc"):
+                    self.sort_vin_var.set(sv_val)
+                else:
+                    self.sort_vin_var.set("asc") # Default for invalid values
             if "skip_nodata" in config: self.skip_nodata_var.set(config["skip_nodata"])
             
             # Normalization
@@ -622,13 +862,22 @@ class VDNCompareGUI:
                     self.norm_sw_var.set(str(sw))
 
             if "normalize_custom" in config:
-                self.norm_custom_var.set(json.dumps(config["normalize_custom"]))
+                self.norm_custom_text.delete("1.0", tk.END)
+                self.norm_custom_text.insert(tk.END, json.dumps(config["normalize_custom"], indent=4))
             
             if "skip_filter" in config:
-                self.skip_filter_var.set(json.dumps(config["skip_filter"]))
+                self.skip_filter_text.delete("1.0", tk.END)
+                self.skip_filter_text.insert(tk.END, json.dumps(config["skip_filter"], indent=4))
                 
             if "vdn_ignore" in config:
                 self.vdn_ignore_var.set(" ".join(config["vdn_ignore"]))
+            
+            if "augment" in config:
+                try:
+                    self.augmentations = config["augment"]
+                    self.render_augmentation_rows()
+                except Exception as ae:
+                    print(f"Error loading augmentations: {ae}")
                 
             # Column Mapping
             s1_map = config.get("s1_map", {})
@@ -667,10 +916,26 @@ class VDNCompareGUI:
         except Exception as e:
             print(f"Error loading config: {e}")
 
-    def save_full_config_silent(self):
+    def _clean_augmentations(self):
+        """Return a serializable copy of augmentations with all tk.Variables resolved."""
+        clean = []
+        for aug in self.augmentations:
+            item = {}
+            for k, v in aug.items():
+                # Skip any key that looks like a Tkinter variable storage
+                if k.endswith('_var'):
+                    continue
+                if isinstance(v, tk.Variable):
+                    item[k] = v.get()
+                else:
+                    item[k] = v
+            clean.append(item)
+        return clean
+
+    def save_full_config(self, show_msg=False):
         # Synchronize compare selections
         self.sync_compare_var()
-        # Same as save_full_config but without message box
+        
         config_path = self.config_var.get()
         s1_map = {}
         s2_map = {}
@@ -692,16 +957,37 @@ class VDNCompareGUI:
             "source2": self.s2_var.get(),
             "s1_map": s1_map,
             "s2_map": s2_map,
-            "skip_nodata": self.skip_nodata_var.get(),
-            "normalize_custom": json.loads(self.norm_custom_var.get()) if self.norm_custom_var.get().strip() != "{}" else {},
-            "skip_filter": json.loads(self.skip_filter_var.get()) if self.skip_filter_var.get().strip() != "{}" else {},
-            "vdn_ignore": [v.strip().strip('"').strip("'") for v in self.vdn_ignore_var.get().split() if v.strip()]
+            "skip_nodata": bool(self.skip_nodata_var.get()),
+            "skip_filter": self._get_json_from_text(self.skip_filter_text),
+            "normalize_custom": self._get_json_from_text(self.norm_custom_text),
+            "vdn_ignore": [v.strip().strip('"').strip("'") for v in self.vdn_ignore_var.get().split() if v.strip()],
+            "augment": self._clean_augmentations()
         }
+        
         try:
+            # Atomic Save: Serialize to string FIRST. 
+            # If this fails, the file on disk remains untouched.
+            json_str = json.dumps(config, indent=4)
+            
             with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=4)
-        except:
-            pass
+                f.write(json_str)
+                
+            if show_msg:
+                messagebox.showinfo("Success", f"Configuration saved to {config_path}")
+        except Exception as e:
+            messagebox.showerror("Save Error", f"Failed to save config: {e}")
+            print(f"Error saving config: {e}")
+
+    def _get_json_from_text(self, text_widget):
+        """Safely parse JSON from a Text widget."""
+        raw = text_widget.get("1.0", tk.END).strip()
+        if not raw or raw == "{}":
+            return {}
+        try:
+            return json.loads(raw)
+        except Exception as e:
+            print(f"Warning: Failed to parse JSON from widget: {e}")
+            return {}
 
 if __name__ == "__main__":
     # If any CLI arguments are present, run headless CLI mode.

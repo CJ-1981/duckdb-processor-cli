@@ -16,10 +16,10 @@
         "html"
     ],
     "samples": "10",
-    "sort_vin": true,
+    "sort_vin": "asc",
     "use_default_input": true,
-    "source1": "C:/Users/Chimin.Jung/OneDrive - Lotus Tech Innovation Centre GmbH/Documents/Obsidian Vault/scripts/duckdb-processor-cli/util/vdn-compare/input/20260504/VDN_SW-comparison_DB-export_20260504.xlsx",
-    "source2": "C:/Users/Chimin.Jung/OneDrive - Lotus Tech Innovation Centre GmbH/Documents/Obsidian Vault/scripts/duckdb-processor-cli/util/vdn-compare/input/20260504/EX30_VDN_list_report_20260504.csv",
+    "source1": "C:/Users/Chimin.Jung/OneDrive - Lotus Tech Innovation Centre GmbH/Documents/Obsidian Vault/scripts/duckdb-processor-cli/util/vdn-compare/input/20260427/VDN_SW-comparison_DB-export_20260429.xlsx",
+    "source2": "C:/Users/Chimin.Jung/OneDrive - Lotus Tech Innovation Centre GmbH/Documents/Obsidian Vault/scripts/duckdb-processor-cli/util/vdn-compare/input/20260427/EX30_VDN_list_report_20260427.csv",
     "s1_map": {
         "vin": "VIN",
         "DB_SW": "CONSUMER_SW_VERSION",
@@ -69,25 +69,18 @@
             "YV12ZEL95RS000254",
             "YV12ZEL9XRS000248",
             "LYV2LEKEXRS000352",
-            "L6TEY2E28RZ000066",
-            "YV12YEKA5SS131690",
-            "YV12YEKAXSS132009",
-            "YV12YEKA4TS170188",
-            "YV12ZEMA8TS170186",
-            "YV12YELA7TS169678",
-            "YV12ZEL02T2700001"
+            "L6TEY2E28RZ000066"
         ]
     },
     "vdn_ignore": [
         "9T00",
-        "FALS",
-        "9SMP"
+        "FALS"
     ],
     "augment": [
         {
             "name": "PLANT",
             "source": "VIN",
-            "start": 10,
+            "start": 11,
             "length": 1,
             "default": "Unknown",
             "condition_col": "model",

@@ -11,7 +11,8 @@ A high-performance Python utility for comparing vehicle software versions, model
 - **Automated Reporting**: Generates a full suite of reports every run: Full Results (CSV), Mismatches Only (CSV), and Summaries in HTML, Markdown, and TXT.
 - **Global Collapsible UI**: HTML reports feature interactive toggles (details/summary) for all sample sections, making it easy to navigate thousands of mismatches.
 - **Incomplete Data Auditing**: Automatically identifies vehicles with missing mandatory information (e.g., missing Model or an empty VDN list) and provides a consolidated breakdown per VIN.
-- **Robust 'NO DATA' Matching**: Correct identifies when both sides are missing data as a MATCH, preventing false positives for empty fields.
+- **Custom Source Aliasing**: Replace generic "Source 1" and "Source 2" labels with professional names (e.g., "Production" vs "Database") throughout all reports, console logs, and mismatch tallies.
+- **Robust 'NO DATA' Matching**: Correct identifies when both sides are missing data as a MATCH, preventing false positives for empty fields. Also includes a `--skip-nodata` feature to exclude incomplete vehicles entirely.
 - **Data-Grid Optimization**: HTML reports are optimized for wide tables with sticky headers, zebra-striping, and secure, document-ready styling.
 - **Auditing & Data Integrity**: Includes a dedicated **Auditing Step** that flags duplicate VINs across files, identifies **VDN Prefix Conflicts** (e.g., multiple AT-series VDNs in one file), and catches **Incomplete Rows**.
 - **Unique Vehicle Metrics**: All mismatch tallies and statistics count **unique VINs** (individual vehicles) rather than raw row occurrences, providing accurate fleet-wide diagnostics even with messy input data.
@@ -20,6 +21,7 @@ A high-performance Python utility for comparing vehicle software versions, model
     - Use `--skip-filter` to drop specific records globally (e.g., Test vehicles) based on column values.
     - Use `--skip-nodata` to automatically exclude any vehicle that is missing comparison data entirely from either side.
     - Use `--vdn-ignore` to strip specific 4-character codes (e.g., `9T00`, `FALS`) or families of codes using wildcards (e.g., `ME*`) from VDN lists during comparison.
+- **Dynamic Column Augmentation**: Create new virtual columns on the fly by extracting substrings from existing data (e.g., VIN positions) and mapping them to readable values using lookup tables.
 
 ## Installation
 
@@ -53,8 +55,26 @@ Example `config.json`:
         "REGION": ["Internal", "Test"],
         "STATUS": ["Prototype"]
     },
-    "skip_nodata": true,
-    "vdn_ignore": ["9T00", "ME*", "FALS"]
+    "source1": "DB.csv",
+    "source2": "PIE.csv",
+    "s1_name": "Database",
+    "s2_name": "Production",
+    "vdn_ignore": ["9T00", "ME*", "FALS"],
+    "augment": [
+        {
+            "name": "PLANT",
+            "source": "VIN",
+            "start": 10,
+            "length": 1,
+            "default": "Unknown",
+            "condition_col": "MODEL",
+            "compare": true,
+            "conditional_lookups": {
+                "EX30": { "1": "Torslanda", "2": "Ghent", "B": "Chengdu" },
+                "PS4": { "1": "Luqiao", "L": "Luqiao" }
+            }
+        }
+    ]
 }
 ```
 *Note: All mapping keys (`s1_map`, `s2_map`, `column_map`) are merged into a single "Intelligence Pool." This allows the tool to find your headers even if you swap the Source 1 and Source 2 files.*
@@ -96,6 +116,8 @@ The VDN Compare GUI provides a professional, tabbed interface for managing compl
 - **Configuration Persistence**: Save and load all settings to `config.json` with a single click.
 - **Reporting Options**: Choose multiple output formats (HTML, MD, CSV, RICH) via checkboxes.
 - **Advanced Filtering**: Configure VIN sorting, sample counts, and data integrity audits (Skip NoData).
+- **Source Aliasing**: Define custom names for your datasets that persist in the generated reports.
+- **Enhanced JSON Editors**: Multi-line, pretty-printed text areas for complex `Skip Filter` and `Custom Normalization` rules.
 - **Console Output**: Real-time progress and summary display directly within the window.
 
 ### Column Settings Tab
@@ -104,10 +126,15 @@ The VDN Compare GUI provides a professional, tabbed interface for managing compl
 - **Custom Roles**: Add arbitrary columns to the comparison engine on the fly.
 - **Selection Toggles**: Use checkboxes to choose exactly which mapped columns should be compared.
 - **Automatic Sync**: Mappings are automatically saved and passed to the comparison engine when you click "Run".
+- **Column Augmentations**: 
+    - Create virtual columns by extracting substrings from source data.
+    - Manage rules in a scrollable grid with native **"Compare?" checkboxes**.
+    - Configure **Conditional Lookups** that change based on other column values (e.g., Plant codes varying by Model).
 
 ## Argument Options
 
 - `-s1`, `--source1`, `-s2`, `--source2`: Manually specify input paths.
+- `--s1-name`, `--s2-name`: Custom labels for Source 1 and Source 2 (default: "Source 1" and "Source 2").
 - `--use-default-input`: Bypass the file dialog and use default paths in `input/` (`DB.csv` and `PIE.csv`).
 - `--samples`: Number of diagnostic samples to show in reports (integer or `all`, default: `10`).
 - `--sort-vin`: Sort results by VIN (`asc`, `desc`, or `none`, default: `asc`).
@@ -116,10 +143,27 @@ The VDN Compare GUI provides a professional, tabbed interface for managing compl
 - `--config`: Path to a custom configuration JSON (default: `config.json`).
 - `--compare`: Comparison scope. Options: `sw`, `vdn`, `model`, `region`, `vin`, or `all` (default: `all`). `all` automatically includes every column defined in your `column_map`.
 - `--vdn-ignore`: Space-separated list of 4-character VDN codes to ignore during comparison (e.g. `9T00 FALS`). Supports glob wildcards (e.g. `ME*` to ignore all variants starting with `ME`).
+- `--augment`: JSON list of augmentation rules. Each rule defines a `name`, `source` column, `start` index, `length`, and a `lookup` or `conditional_lookups` dictionary.
 - `--format`: Output format(s). Options: `html`, `md`, `rich`, `csv`.
 - `--normalize-models`: Equivalency groups for models. Format: `"Standard,Alias1,Alias2"`.
 - `--normalize-sw`: Equivalency groups for software. Format: `"Standard,Alias1,Alias2"`.
 - `--normalize-custom`: Custom normalization rules in JSON format mapping generic column names to lists of equivalent groups. Best configured via `config.json`.
+
+## Data Augmentation (Lookups)
+
+The tool allows you to derive new data from existing columns. This is particularly useful for decoding VINs or tagging data with business-friendly labels.
+
+### How it works:
+1. **Extraction**: You specify a source column (like `VIN`), a start index (0-based), and a length.
+2. **Simple Lookup**: The tool looks up the extracted string in a flat table (e.g., `{"B": "Chengdu", "1": "Torslanda"}`).
+3. **Conditional Lookup**: If the meaning of a code changes based on another column (e.g., the plant code `1` means different things for different car models), you can use a conditional lookup:
+   ```json
+   {
+       "EX30": { "1": "Torslanda", "2": "Ghent" },
+       "PS4": { "1": "Luqiao" }
+   }
+   ```
+4. **Comparison**: By checking the **"Compare?"** checkbox in the GUI (or setting `"compare": true` in JSON), these virtual columns are automatically included in the comparison reports and mismatch tallies.
 
 ## Output
 

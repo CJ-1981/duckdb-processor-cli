@@ -10,8 +10,9 @@ The new tab will:
 1. **Read the actual column headers from the loaded CSV/Excel files** (after Source 1 / Source 2 are selected) and display them in dropdowns/lists.
 2. **Let users map each internal role** (`VIN`, `SW`, `VDN`, `MODEL`, `REGION`, and any custom columns) to the actual column names found in each file.
 3. **Let users choose which mapped columns to include in the comparison** via checkboxes.
-4. **Write the resulting `column_map` and `compare` back to the GUI state** so the comparison run picks it up automatically (no manual `config.json` editing needed).
-5. Optionally save/load the mapping as `config.json` for reuse.
+4. **Write the resulting `column_map`, `compare`, and `augmentations` back to the GUI state** so the comparison run picks it up automatically (no manual `config.json` editing needed).
+5. **Manage Column Augmentations**: Create new descriptive columns (e.g. PLANT) by extracting substrings from existing ones (e.g. VIN) and mapping them via lookup tables.
+6. Optionally save/load the mapping as `config.json` for reuse.
 
 ---
 
@@ -64,7 +65,8 @@ Convert the existing flat `main_frame` layout to a `ttk.Notebook` with two tabs:
 - **VIN is required** (marked ★): If VIN is not mapped, "Apply to Run" shows a validation warning.
 - **Custom rows**: The "+ Add Row" button adds an extra row with a free-text "Role name" field and two comboboxes, allowing mapping of arbitrary extra columns.
 - **Sync with Run tab**: Changing the compare checkboxes updates `self.compare_var` on the Run tab so the displayed value always reflects reality.
-- **Config save**: Merges the column mapping into the existing `config.json` format (including all current Run-tab values), writes to the path in `self.config_var`.
+- **Config save**: Merges the column mapping and augmentations into the existing `config.json` format (including all current Run-tab values), writes to the path in `self.config_var`.
+- **Augmentation Logic**: New columns are generated on-the-fly during data loading based on substring rules and lookup dictionaries. These augmented columns can then be selected for comparison just like raw columns.
 
 ---
 

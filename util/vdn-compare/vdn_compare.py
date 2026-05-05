@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 import fnmatch
 
-__version__ = "1.3.0"
+__version__ = "1.5.0"
 
 # Null-like string values produced by pandas/Excel that should be treated as missing data.
 # Centralised here so they're easy to extend without hunting through the codebase.
@@ -248,12 +248,85 @@ def save_dataframe(df, file_path, fmt):
         cprint(f"\n[bold red][ERROR][/bold red] Permission denied: '{file_path}'. ")
         cprint("[yellow]Please ensure the file is NOT open in Excel or another program, then try again.[/yellow]")
 
+# Helper to aggressively drop memory of unused columns right after loading
+def _keep_mapped_only(df, common_map, augment_rules):
+    # We also need to keep columns used as sources for augmentations
+    augment_sources = [r.get('source') for r in augment_rules if r.get('source')]
+    keep_cols = [c for c in df.columns if c in common_map.keys() or c in common_map.values() or c.upper() == 'VIN' or c in augment_sources]
+    return df[keep_cols].copy()
+
+def _apply_augmentations(df, rules, label, common_map):
+    for rule in rules:
+        name = rule.get('name')
+        source = rule.get('source')
+        start = rule.get('start', 0)
+        length = rule.get('length')
+        lookup = rule.get('lookup', {})
+        default = rule.get('default', 'Unknown')
+        
+        condition_col = rule.get('condition_col')
+        conditional_lookups = rule.get('conditional_lookups', {})
+        
+        if not name or not source: continue
+        
+        # Smart source selection: Prefer normalized version if available
+        src_col = next((c for c in df.columns if c.lower() == f"{source}_norm".lower()), None)
+        if not src_col:
+            src_col = next((c for c in df.columns if c.lower() == source.lower()), None)
+        if not src_col:
+            src_col = next((k for k, v in common_map.items() if v.lower() == source.lower()), None)
+            
+        if not src_col or src_col not in df.columns:
+            cprint(f"[yellow]Warning: Augmentation source '{source}' not found in {label}. Skipping '{name}'.[/yellow]")
+            continue
+
+        # Basic cleaning: ensure we are working with stripped strings for the source
+        temp_src = df[src_col].astype(str).str.strip().str.replace(r'^"|"$', '', regex=True)
+        end = start + length if length else None
+        
+        try:
+            if condition_col:
+                # Smart condition selection: Prefer normalized version if available
+                cond_src = next((c for c in df.columns if f"{condition_col}_norm".lower() == c.lower()), None)
+                if not cond_src:
+                    cond_src = next((c for c in df.columns if c.lower() == condition_col.lower()), None)
+                if not cond_src:
+                    cond_src = next((k for k, v in common_map.items() if v.lower() == condition_col.lower()), None)
+                
+                if cond_src and cond_src in df.columns:
+                    df[name] = default
+                    # Pre-clean condition column for matching
+                    temp_cond = df[cond_src].astype(str).str.strip().str.upper()
+                    
+                    # Apply each conditional lookup table
+                    for cond_key, table in conditional_lookups.items():
+                        # Support comma-separated keys: "EX30, V216"
+                        target_vals = [v.strip().upper() for v in str(cond_key).split(',')]
+                        mask = temp_cond.isin(target_vals)
+                        
+                        if mask.any():
+                            vals = temp_src.loc[mask].str[start:end].map(table)
+                            df.loc[mask, name] = vals.fillna(default)
+                    cprint(f"[cyan]Augmented {label} with conditional column '{name}' (source: {src_col}, condition: {cond_src})[/cyan]")
+                else:
+                    cprint(f"[yellow]Warning: Condition column '{condition_col}' not found in {label}. Using default lookup if available.[/yellow]")
+                    df[name] = temp_src.str[start:end].map(lookup).fillna(default)
+            else:
+                # Standard non-conditional logic
+                df[name] = temp_src.str[start:end].map(lookup).fillna(default)
+                cprint(f"[cyan]Augmented {label} with column '{name}' (from {src_col}[{start}:{end}])[/cyan]")
+        except Exception as e:
+            cprint(f"[yellow]Warning: Failed to apply augmentation '{name}' in {label}: {e}[/yellow]")
+    return df
+
 def main():
     cprint(f"[bold cyan]VDN Compare[/bold cyan] [dim]v{__version__}[/dim]")
     
     parser = argparse.ArgumentParser(description="Compare Source 1 and Source 2 files.")
     parser.add_argument('-s1', '--source1', help="Source 1 file", default=str(Path("input/DB.csv")))
     parser.add_argument('-s2', '--source2', help="Source 2 file", default=str(Path("input/PIE.csv")))
+    parser.add_argument('--s1-name', help="Custom name for Source 1", default="Source 1")
+    parser.add_argument('--s2-name', help="Custom name for Source 2", default="Source 2")
     parser.add_argument('--format', nargs='+', choices=['csv', 'markdown', 'md', 'rich', 'html'], default=['rich', 'md', 'html'], help="Format(s) for summary output (can select multiple)")
     parser.add_argument('--sort-vin', choices=['none', 'asc', 'desc'], default='asc', help="Sort the output records by VIN (default: none, respects input order)")
     parser.add_argument('--samples', default='10', help="Number of samples to show in summary (integer or 'all', default: 10)")
@@ -266,6 +339,7 @@ def main():
     parser.add_argument('--skip-filter', default="{}", help='Values to skip/exclude, in JSON format: {"ColumnName": ["Value1", "Value2"]}. Rows matching any of these will be dropped.')
     parser.add_argument('--skip-nodata', action='store_true', help='Skip rows with missing data in any compared column')
     parser.add_argument('--vdn-ignore', nargs='+', default=[], help='List of 4-character VDN codes to ignore during comparison (e.g. "9T00" "FALS")')
+    parser.add_argument('--augment', default="[]", help='Column augmentation rules in JSON format: [{"name": "PLANT", "source": "VIN", "start": 10, "length": 1, "lookup": {...}, "default": "Unknown"}]')
     parser.add_argument('--config', help="Path to a JSON file for custom configuration and column mapping", default="config.json")
     
     # 1. Parse known args first to find the config path
@@ -308,6 +382,15 @@ def main():
     else:
         custom_norms = args.normalize_custom if args.normalize_custom else {}
 
+    if isinstance(args.augment, str):
+        try:
+            augment_rules = json.loads(args.augment)
+        except Exception as e:
+            cprint(f"[bold red]Error: Could not parse --augment JSON: {e}[/bold red]")
+            augment_rules = []
+    else:
+        augment_rules = args.augment if args.augment else []
+
     comp_flags = [c.lower() for c in args.compare]
     compare_sw = 'sw' in comp_flags
     compare_vdn = 'vdn' in comp_flags
@@ -330,23 +413,23 @@ def main():
         root.withdraw()  # Hide the main tkinter window
         root.attributes('-topmost', True) # Bring dialog to front
 
-        cprint("[cyan]Please select Source 1 file...[/cyan]")
+        cprint(f"[cyan]Please select {args.s1_name} file...[/cyan]")
         s1_file = filedialog.askopenfilename(
-            title="Select Source 1 file",
+            title=f"Select {args.s1_name} file",
             filetypes=[("CSV/Excel files", "*.csv *.xlsx *.xls"), ("All files", "*.*")]
         )
         if not s1_file:
-            cprint("[bold red]No Source 1 file selected. Exiting.[/bold red]")
+            cprint(f"[bold red]No {args.s1_name} file selected. Exiting.[/bold red]")
             sys.exit(0)
         args.source1 = s1_file
 
-        cprint("[cyan]Please select Source 2 file...[/cyan]")
+        cprint(f"[cyan]Please select {args.s2_name} file...[/cyan]")
         s2_file = filedialog.askopenfilename(
-            title="Select Source 2 file",
+            title=f"Select {args.s2_name} file",
             filetypes=[("CSV/Excel files", "*.csv *.xlsx *.xls"), ("All files", "*.*")]
         )
         if not s2_file:
-            cprint("[bold red]No Source 2 file selected. Exiting.[/bold red]")
+            cprint(f"[bold red]No {args.s2_name} file selected. Exiting.[/bold red]")
             sys.exit(0)
         args.source2 = s2_file
         
@@ -386,19 +469,14 @@ def main():
     # Start the timer here to exclude file dialog interaction time
     start_time = time.time()
     
-    # Helper to aggressively drop memory of unused columns right after loading
-    def _keep_mapped_only(df):
-        keep_cols = [c for c in df.columns if c in common_map.keys() or c in common_map.values() or c.upper() == 'VIN']
-        return df[keep_cols].copy()
-
-    cprint(f"[cyan]Loading Source 1:[/cyan] [bold white]{args.source1}[/bold white]")
+    cprint(f"[cyan]Loading {args.s1_name}:[/cyan] [bold white]{args.source1}[/bold white]")
     df_s1 = load_file(args.source1)
-    df_s1 = _keep_mapped_only(df_s1)
+    df_s1 = _keep_mapped_only(df_s1, common_map, augment_rules)
     gc.collect()
     
-    cprint(f"[cyan]Loading Source 2:[/cyan] [bold white]{args.source2}[/bold white]")
+    cprint(f"[cyan]Loading {args.s2_name}:[/cyan] [bold white]{args.source2}[/bold white]")
     df_s2 = load_file(args.source2)
-    df_s2 = _keep_mapped_only(df_s2)
+    df_s2 = _keep_mapped_only(df_s2, common_map, augment_rules)
     gc.collect()
     
     # 2.5. Pre-rename cleanup: Prevent existing headers from conflicting with target roles.
@@ -419,10 +497,30 @@ def main():
     df_s1.rename(columns=common_map, inplace=True)
     df_s2.rename(columns=common_map, inplace=True)
 
+    # preprocess_df is a module-level function; dependencies are passed explicitly.
+    _pp_kwargs = dict(
+        skip_filters=skip_filters,
+        compare_model=True, # Allow normalization even if not explicitly requested yet
+        compare_sw=True,
+        custom_norms=custom_norms,
+        normalize_models=args.normalize_models,
+        normalize_sw=args.normalize_sw,
+    )
+    df_s1, s1_stats = preprocess_df(df_s1, args.s1_name, **_pp_kwargs)
+    df_s2, s2_stats = preprocess_df(df_s2, args.s2_name, **_pp_kwargs)
+
+    # 2.6 Augmentation (Run AFTER preprocessing so we can use normalized values!)
+    df_s1 = _apply_augmentations(df_s1, augment_rules, args.s1_name, common_map)
+    df_s2 = _apply_augmentations(df_s2, augment_rules, args.s2_name, common_map)
+
     # 1. Identify Comparison Targets
     # All columns effectively renamed to something that isn't VIN are potential targets.
-    # Use dict.fromkeys to get unique values while preserving the insertion order from common_map.
-    s_cols = [c for c in dict.fromkeys(common_map.values()) if c != 'VIN']
+    # Include augmented columns if they are flagged for comparison.
+    aug_targets = [r.get('name') for r in augment_rules if r.get('name') and r.get('compare', True)]
+    all_aug_names = [r.get('name') for r in augment_rules if r.get('name')]
+    
+    # Pool of all potential comparison targets
+    s_cols = [c for c in dict.fromkeys(list(common_map.values()) + all_aug_names) if c != 'VIN']
     
     # Check what actually exists in both dataframes
     all_existing = [c for c in s_cols if c in df_s1.columns and c in df_s2.columns]
@@ -432,23 +530,28 @@ def main():
     reserved_map = {'sw': 'CONSUMER_SW_VERSION', 'vdn': 'VDN_LIST', 'model': 'MODEL'}
     
     requested_names = []
+    
+    # Always include augmented columns that have compare=True
+    for aug_name in aug_targets:
+        if aug_name in all_existing:
+            requested_names.append(aug_name)
+
     if 'all' in [f.lower() for f in comp_flags]:
-        requested_names = s_cols
+        requested_names.extend([c for c in s_cols if c not in requested_names])
     else:
         for flag in comp_flags:
             flag_l = flag.lower()
             if flag_l in reserved_map:
-                requested_names.append(reserved_map[flag_l])
+                name = reserved_map[flag_l]
+                if name not in requested_names: requested_names.append(name)
             else:
-                # Check if flags matches an internal column name directly 
-                # OR matches a Source 1 header that was mapped to that column
-                target_name = None
-                if flag_l.upper() in [c.upper() for c in s_cols]:
-                     target_name = next(c for c in s_cols if c.upper() == flag_l.upper())
-                else:
-                     target_name = next((v for k, v in common_map.items() if k.lower() == flag_l), None)
+                # Check if flag matches an internal column name directly (including augmented)
+                target_name = next((c for c in s_cols if c.upper() == flag_l.upper()), None)
+                if not target_name:
+                    # OR matches a Source 1 header that was mapped to that column
+                    target_name = next((v for k, v in common_map.items() if k.lower() == flag_l), None)
                 
-                if target_name:
+                if target_name and target_name not in requested_names:
                     requested_names.append(target_name)
     
     # Ensure existing_targets follows the specific order requested by the user/default flags
@@ -466,20 +569,6 @@ def main():
         cprint(f"[bold red]CRITICAL ERROR: 'VIN' column not found in one or both files.[/bold red]")
         input("\nPress Enter to exit...")
         sys.exit(1)
-
-    # 2. Trim whitespaces/quotes, normalize null-like values, apply filters and normalization.
-    # preprocess_df is a module-level function; dependencies are passed explicitly.
-    _pp_kwargs = dict(
-        skip_filters=skip_filters,
-        compare_model=compare_model,
-        compare_sw=compare_sw,
-        custom_norms=custom_norms,
-        normalize_models=args.normalize_models,
-        normalize_sw=args.normalize_sw,
-    )
-    df_s1, s1_stats = preprocess_df(df_s1, "Source 1", **_pp_kwargs)
-    df_s2, s2_stats = preprocess_df(df_s2, "Source 2", **_pp_kwargs)
-
 
     # 3. Parse VDN_LIST smartly
     exact_ignores = set()
@@ -605,8 +694,8 @@ def main():
         return sorted(set(result)) if result else []
 
     vdn_ignore_stats = {'s1': {}, 's2': {}}
-    for df_label, df in [('Source 1', df_s1), ('Source 2', df_s2)]:
-        label_key = 's1' if df_label == 'Source 1' else 's2'
+    for key, df_label, df in [('s1', args.s1_name, df_s1), ('s2', args.s2_name, df_s2)]:
+        label_key = key
         if compare_vdn and 'VDN_LIST' in df.columns:
             # Aggressive garbage collection before heavy string parsing
             gc.collect()
@@ -636,7 +725,7 @@ def main():
     # 3.2. EXTRA FILTER: Skip rows with missing/empty data if requested
     skipped_nodata = {'s1': 0, 's2': 0}
     if args.skip_nodata:
-        for label, df_ref in [('Source 1', df_s1), ('Source 2', df_s2)]:
+        for key, label, df_ref in [('s1', args.s1_name, df_s1), ('s2', args.s2_name, df_s2)]:
             nodata_mask = pd.Series(False, index=df_ref.index)
             for col in existing_targets:
                 # Resolve the column to check (original or cleaned)
@@ -649,7 +738,7 @@ def main():
             
             skip_count = nodata_mask.sum()
             if skip_count > 0:
-                if label == 'Source 1': 
+                if key == 's1': 
                     df_s1 = df_s1[~nodata_mask].copy()
                     skipped_nodata['s1'] = skip_count
                 else: 
@@ -674,7 +763,8 @@ def main():
         return None
 
     audit_results = {'s1': {}, 's2': {}}
-    for label, df in [('s1', df_s1), ('s2', df_s2)]:
+    for key, df in [('s1', df_s1), ('s2', df_s2)]:
+        label = args.s1_name if key == 's1' else args.s2_name
         # Part 1: Duplicate VINs
         dup_mask = df.duplicated(subset=['VIN'], keep=False)
         dup_vins = sorted(df[dup_mask]['VIN'].unique().tolist())
@@ -683,7 +773,7 @@ def main():
         prefix_conflicts = []
         if 'VDN_LIST_CLEAN' in df.columns:
             if has_tqdm:
-                cprint(f"[cyan]Auditing VDN Prefix Conflicts for {label.upper()}...[/cyan]")
+                cprint(f"[cyan]Auditing VDN Prefix Conflicts for {label}...[/cyan]")
                 conflict_series = df['VDN_LIST_CLEAN'].progress_apply(find_vdn_prefix_conflicts)
             else:
                 conflict_series = df['VDN_LIST_CLEAN'].apply(find_vdn_prefix_conflicts)
@@ -719,24 +809,26 @@ def main():
         
         u_empty_vins = df[empty_mask_combined]['VIN'].nunique()
         
-        audit_results[label] = {
+        # Use key (s1/s2) for internal results storage
+        curr_stats = s1_stats if key == 's1' else s2_stats
+        audit_results[key] = {
             'dup_vins': dup_vins,
             'extra_rows': len(df) - df['VIN'].nunique(),
             'prefix_conflicts': sorted(prefix_conflicts),
             'empty_data': empty_data,
             'vin_empty_map': vin_empty_map,
             'u_empty_vins': u_empty_vins,
-            'skip_stats': s1_stats['skip_stats'] if label == 's1' else s2_stats['skip_stats'],
-            'skipped_vins': s1_stats.get('skipped_vins', set()) if label == 's1' else s2_stats.get('skipped_vins', set()),
-            'norm_stats': s1_stats['norm_stats'] if label == 's1' else s2_stats['norm_stats'],
-            'vdn_ignore_stats': vdn_ignore_stats[label],
+            'skip_stats': curr_stats['skip_stats'],
+            'skipped_vins': curr_stats.get('skipped_vins', set()),
+            'norm_stats': curr_stats['norm_stats'],
+            'vdn_ignore_stats': vdn_ignore_stats[key],
             'present_vins': set(df['VIN'].astype(str).unique())
         }
 
     # Console Warnings (Immediate)
     for label in ['s1', 's2']:
         res = audit_results[label]
-        l_disp = "Source 1" if label == 's1' else "Source 2"
+        l_disp = args.s1_name if label == 's1' else args.s2_name
         if res['dup_vins']:
             cprint(f"[bold yellow]DATA AUDIT WARNING: {len(res['dup_vins'])} duplicate VINs found in {l_disp} file (affecting {res['extra_rows']} redundant rows).[/bold yellow]")
         if res['prefix_conflicts']:
@@ -986,11 +1078,20 @@ def main():
             mismatched_s1 = result_df.loc[mismatch_indices, 's1_vdns_json']
             mismatched_s2 = result_df.loc[mismatch_indices, 's2_vdns_json']
             
-            s_sets = mismatched_s1.apply(_parse_vdn_json)
-            t_sets = mismatched_s2.apply(_parse_vdn_json)
-
-            only_in_t = [t - s for s, t in zip(s_sets, t_sets)]
-            only_in_s = [s - t for s, t in zip(s_sets, t_sets)]
+            if has_tqdm:
+                tqdm.pandas(desc="Parsing VDNs")
+                s_sets = mismatched_s1.progress_apply(_parse_vdn_json)
+                t_sets = mismatched_s2.progress_apply(_parse_vdn_json)
+                
+                # Wrap zip iterator in tqdm
+                zipped = list(tqdm(zip(s_sets, t_sets), total=len(s_sets), desc="Calculating VDN Diff", leave=False))
+                only_in_t = [t - s for s, t in zipped]
+                only_in_s = [s - t for s, t in zipped]
+            else:
+                s_sets = mismatched_s1.apply(_parse_vdn_json)
+                t_sets = mismatched_s2.apply(_parse_vdn_json)
+                only_in_t = [t - s for s, t in zip(s_sets, t_sets)]
+                only_in_s = [s - t for s, t in zip(s_sets, t_sets)]
             
             result_df.loc[mismatch_indices, 'Only in S1'] = [
                 'SKIPPED' if orig == 'SKIPPED' else ('NO DATA' if len(s) == 0 else (", ".join(sorted(x)) if x else ""))
@@ -1031,27 +1132,27 @@ def main():
                         vdn_diff_pairs.append((vin, sv, tv))
         
         # Create VDN Tally DataFrame
-        vdn_tally_df = pd.DataFrame(vdn_diff_pairs, columns=['VIN', 'VDN in S1', 'VDN in S2'])
+        vdn_tally_df = pd.DataFrame(vdn_diff_pairs, columns=['VIN', f'VDN in {args.s1_name}', f'VDN in {args.s2_name}'])
         if not vdn_tally_df.empty:
             # We separate "SKIPPED", "NO DATA" (empty list) from "No Match" (missing specific code)
             sentinels = ['SKIPPED', 'NO DATA', 'No Match']
-            none_in_s = vdn_tally_df[vdn_tally_df['VDN in S1'].isin(sentinels)]
-            none_in_t = vdn_tally_df[vdn_tally_df['VDN in S2'].isin(sentinels)]
-            both_codes = vdn_tally_df[~vdn_tally_df['VDN in S1'].isin(sentinels) & ~vdn_tally_df['VDN in S2'].isin(sentinels)]
+            none_in_s = vdn_tally_df[vdn_tally_df[f'VDN in {args.s1_name}'].isin(sentinels)]
+            none_in_t = vdn_tally_df[vdn_tally_df[f'VDN in {args.s2_name}'].isin(sentinels)]
+            both_codes = vdn_tally_df[~vdn_tally_df[f'VDN in {args.s1_name}'].isin(sentinels) & ~vdn_tally_df[f'VDN in {args.s2_name}'].isin(sentinels)]
             
             summaries = []
             # Aggregate sentinel cases while preserving the distinction
             for sent in sentinels:
-                sub_s = none_in_s[none_in_s['VDN in S1'] == sent]
+                sub_s = none_in_s[none_in_s[f'VDN in {args.s1_name}'] == sent]
                 if not sub_s.empty:
-                    summaries.append({'VDN in S1': sent, 'VDN in S2': '(Various VDNs)', 'Count': sub_s['VIN'].nunique()})
-                sub_t = none_in_t[none_in_t['VDN in S2'] == sent]
+                    summaries.append({f'VDN in {args.s1_name}': sent, f'VDN in {args.s2_name}': '(Various VDNs)', 'Count': sub_s['VIN'].nunique()})
+                sub_t = none_in_t[none_in_t[f'VDN in {args.s2_name}'] == sent]
                 if not sub_t.empty:
-                    summaries.append({'VDN in S1': '(Various VDNs)', 'VDN in S2': sent, 'Count': sub_t['VIN'].nunique()})
+                    summaries.append({f'VDN in {args.s1_name}': '(Various VDNs)', f'VDN in {args.s2_name}': sent, 'Count': sub_t['VIN'].nunique()})
                 
             if not both_codes.empty:
                 # Count unique VINs for each specific pairwise mismatch pattern
-                true_tally = both_codes.groupby(['VDN in S1', 'VDN in S2'])['VIN'].nunique().reset_index(name='Count')
+                true_tally = both_codes.groupby([f'VDN in {args.s1_name}', f'VDN in {args.s2_name}'])['VIN'].nunique().reset_index(name='Count')
                 vdn_tally_df = pd.concat([pd.DataFrame(summaries), true_tally.sort_values('Count', ascending=False)], ignore_index=True)
             else:
                 vdn_tally_df = pd.DataFrame(summaries)
@@ -1130,28 +1231,48 @@ def main():
     # ---------------------------------------------------------
     # PART A: CONSOLE OUTPUT
     # ---------------------------------------------------------
+    # Build a comprehensive renamer for all possible internal column names to display names
+    display_renamer = {
+        'vin': 'VIN', 'Result': 'Result', 'Count': 'Count',
+        'Only in S1': f'Only in {args.s1_name}', 'Only in S2': f'Only in {args.s2_name}',
+        's1_sw': f'{args.s1_name} SW', 's2_sw': f'{args.s2_name} SW',
+        's1_model': f'{args.s1_name} Model', 's2_model': f'{args.s2_name} Model',
+        's1_vdns_json': f'{args.s1_name} VDNs', 's2_vdns_json': f'{args.s2_name} VDNs',
+        'sw_match': 'SW Match', 'model_match': 'Model Match', 'vdn_match': 'VDN Match'
+    }
+    for col in existing_targets:
+        # Standardize matching by checking both the column name and its lowercase version
+        for prefix, source_label in [('s1_', args.s1_name), ('s2_', args.s2_name)]:
+            # Add both exact and lowercase keys to the renamer to be robust
+            display_renamer[f"{prefix}{col}"] = f"{source_label} {col}"
+            display_renamer[f"{prefix}{col.lower()}"] = f"{source_label} {col}"
+            
+        m_col = f"{col.lower()}_match"
+        if m_col not in display_renamer:
+            display_renamer[m_col] = f"{col} Match"
+
     is_md = False # For console print
     summary_lines_console = [
         "COMPARISON METADATA",
         "-"*40,
-        f"Source 1 File: {Path(args.source1).name}",
-        f"Source 2 File: {Path(args.source2).name}",
+        f"{args.s1_name} File: {Path(args.source1).name}",
+        f"{args.s2_name} File: {Path(args.source2).name}",
         f"Full Report: {full_report_path.name}",
         f"Mismatches: {m_path.name}",
-        f"Source 1 Dups: {len(audit_results['s1']['dup_vins'])} VINs",
-        f"Source 2 Dups: {len(audit_results['s2']['dup_vins'])} VINs",
+        f"{args.s1_name} Dups: {len(audit_results['s1']['dup_vins'])} VINs",
+        f"{args.s2_name} Dups: {len(audit_results['s2']['dup_vins'])} VINs",
     ]
     if compare_vdn:
         summary_lines_console.extend([
-            f"Source 1 VDN Prefix Conflicts: {len(audit_results['s1']['prefix_conflicts'])} VINs",
-            f"Source 2 VDN Prefix Conflicts: {len(audit_results['s2']['prefix_conflicts'])} VINs",
+            f"{args.s1_name} VDN Prefix Conflicts: {len(audit_results['s1']['prefix_conflicts'])} VINs",
+            f"{args.s2_name} VDN Prefix Conflicts: {len(audit_results['s2']['prefix_conflicts'])} VINs",
         ])
     summary_lines_console.extend([
         "\nCOMPARISON RESULTS",
         "="*80,
-        f"Total Unique VINs Analyzed: {u_total} (Source 1: {u_s1}, Source 2: {u_s2})",
-        f"Unique VINs found only in Source 1: {u_only_s1}",
-        f"Unique VINs found only in Source 2: {u_only_s2}"
+        f"Total Unique VINs Analyzed: {u_total} ({args.s1_name}: {u_s1}, {args.s2_name}: {u_s2})",
+        f"Unique VINs found only in {args.s1_name}: {u_only_s1}",
+        f"Unique VINs found only in {args.s2_name}: {u_only_s2}"
     ])
     for col in existing_targets:
         md = mismatched_data[col]
@@ -1182,8 +1303,8 @@ def main():
             res = audit_results[label]
             other_label = 's2' if label == 's1' else 's1'
             other_res = audit_results[other_label]
-            l_disp = "Source 1" if label == 's1' else "Source 2"
-            other_disp = "Source 2" if label == 's1' else "Source 1"
+            l_disp = args.s1_name if label == 's1' else args.s2_name
+            other_disp = args.s2_name if label == 's1' else args.s1_name
             
             if res['skip_stats']:
                 details = []
@@ -1240,21 +1361,30 @@ def main():
         if line.strip(): cprint(f"[bold cyan]{line.replace('- **', '').replace('**', '')}[/bold cyan]")
 
     # Helper function for pretty table printing to console
-    def render_console_table(df, title, header_style="bold cyan", first_col_style="bold white"):
+    def render_console_table(df, title, header_style="bold cyan", first_col_style="bold white", renamer=None):
         if df.empty: return
+        
+        # Create a display copy with renamed columns if requested
+        if renamer:
+            # Only rename columns that exist in the renamer
+            r_map = {k: v for k, v in renamer.items() if k in df.columns}
+            display_df = df.rename(columns=r_map)
+        else:
+            display_df = df
+
         cprint(f"\n[{header_style}]{title}[/{header_style}]")
         if has_rich:
             console = Console(force_terminal=True)
             table_box = box.ASCII if os.name == 'nt' and args.pager else box.SQUARE
             table = Table(show_header=True, header_style=header_style, show_lines=True, box=table_box)
-            for i, col in enumerate(df.columns):
+            for i, col in enumerate(display_df.columns):
                  # Truncate long content with ellipsis to keep table compact
                  table.add_column(
                      str(col), 
                      overflow="fold", 
                      style=first_col_style if i == 0 else None
                  )
-            for _, row in df.iterrows():
+            for _, row in display_df.iterrows():
                 # Truncate very long values manually to keep table compact while allowing normal columns to wrap
                 display_row = []
                 for val in row.values:
@@ -1270,7 +1400,7 @@ def main():
                 with console.pager(styles=True): console.print(table)
             else: console.print(table)
         else:
-            cprint(df.to_string(index=False))
+            cprint(display_df.to_string(index=False))
 
     # 1. SW Version Matrix & Detailed List (Console)
     # Pre-compute the cross-tab once; reused by both console and file output sections
@@ -1280,13 +1410,13 @@ def main():
     )
 
     if sw_matrix_df is not None:
-        header_text = "SW VERSION MISMATCH MATRIX (Source 1 vs Source 2)"
+        header_text = f"SW VERSION MISMATCH MATRIX ({args.s1_name} vs {args.s2_name})"
         cprint(f"\n[bold magenta]{header_text}:[/bold magenta]")
         
         # Matrix View
         if has_rich:
             console = Console(force_terminal=True)
-            matrix_df_reset = sw_matrix_df.reset_index().rename(columns={'s1_sw': 'Source 1 SW(row)\\Source 2 SW(col)'})
+            matrix_df_reset = sw_matrix_df.reset_index().rename(columns={'s1_sw': f'{args.s1_name} SW(row)\\{args.s2_name} SW(col)'})
             table_box = box.ASCII if os.name == 'nt' and args.pager else box.SQUARE
             table = Table(show_header=True, header_style="bold magenta", show_lines=True, box=table_box)
             for i, col in enumerate(matrix_df_reset.columns): 
@@ -1301,7 +1431,7 @@ def main():
         # Detailed Tally View
         sw_counts = mismatched_sw.groupby(['s1_sw', 's2_sw']).size().reset_index(name='Count')
         sw_counts = sw_counts.sort_values('Count', ascending=False)
-        render_console_table(sw_counts, "DETAILED SW MISMATCH TALLY", header_style="bold magenta")
+        render_console_table(sw_counts, "DETAILED SW MISMATCH TALLY", header_style="bold magenta", renamer=display_renamer)
 
     # 1.2 Other Column Tallies (Generic Handling)
     for col in existing_targets:
@@ -1311,11 +1441,11 @@ def main():
         
         t_df = md['df'].groupby([md['s_col'], md['t_col']]).size().reset_index(name='Count')
         t_df = t_df.sort_values('Count', ascending=False)
-        render_console_table(t_df, f"DETAILED {md['label'].upper()} MISMATCH TALLY", header_style="bold magenta")
+        render_console_table(t_df, f"DETAILED {md['label'].upper()} MISMATCH TALLY", header_style="bold magenta", renamer=display_renamer)
 
     # 1.3. VDN Mismatch Detailed Tally (Console)
     if compare_vdn and not vdn_tally_df.empty:
-        render_console_table(vdn_tally_df, "DETAILED VDN MISMATCHES (Pairwise)", header_style="bold cyan")
+        render_console_table(vdn_tally_df, "DETAILED VDN MISMATCHES (Pairwise)", header_style="bold cyan", renamer=display_renamer)
 
 
     # 2. Sample Data for Console (Mismatches and Missing VINs)
@@ -1330,7 +1460,7 @@ def main():
         df_sample = md['df'].head(sample_limit) if sample_limit else md['df']
         cols = ['vin', md['s_col'], md['t_col'], md['match_col']]
         title = f"{'SAMPLES: ' if sample_limit else ''}{md['label']} MISMATCHES ({len(df_sample)} shown of {md['u_count']} unique VINs)"
-        render_console_table(df_sample[cols], title, header_style="bold magenta")
+        render_console_table(df_sample[cols], title, header_style="bold magenta", renamer=display_renamer)
 
     # Missing in Source 1 Samples (Found only in S2)
     if not missing_in_s1.empty:
@@ -1342,8 +1472,8 @@ def main():
             elif col == 'MODEL': cols.append('s2_model')
             else: cols.append(f's2_{col.lower()}')
             
-        title_ms = f"{'SAMPLES: ' if sample_limit else ''}VINs FOUND ONLY IN SOURCE 2 ({len(df_ms)} entries shown of {u_only_s2} unique VINs)"
-        render_console_table(df_ms[[c for c in cols if c in df_ms.columns]], title_ms, header_style="bold yellow")
+        title_ms = f"{'SAMPLES: ' if sample_limit else ''}VINs FOUND ONLY IN {args.s2_name} ({len(df_ms)} entries shown of {u_only_s2} unique VINs)"
+        render_console_table(df_ms[[c for c in cols if c in df_ms.columns]], title_ms, header_style="bold yellow", renamer=display_renamer)
         
     # Missing in Source 2 Samples (Found only in S1)
     if not missing_in_s2.empty:
@@ -1355,8 +1485,8 @@ def main():
             elif col == 'MODEL': cols.append('s1_model')
             else: cols.append(f's1_{col.lower()}')
             
-        title_mt = f"{'SAMPLES: ' if sample_limit else ''}VINs FOUND ONLY IN SOURCE 1 ({len(df_mt)} entries shown of {u_only_s1} unique VINs)"
-        render_console_table(df_mt[[c for c in cols if c in df_mt.columns]], title_mt, header_style="bold yellow")
+        title_mt = f"{'SAMPLES: ' if sample_limit else ''}VINs FOUND ONLY IN {args.s1_name} ({len(df_mt)} entries shown of {u_only_s1} unique VINs)"
+        render_console_table(df_mt[[c for c in cols if c in df_mt.columns]], title_mt, header_style="bold yellow", renamer=display_renamer)
 
     # (Already handled above)
 
@@ -1366,7 +1496,7 @@ def main():
         cols = ['vin', 'vdn_match', 'Only in S1', 'Only in S2']
             
         title_vdn = f"{'SAMPLES: ' if sample_limit else ''}VDN MISMATCHES ({len(sample_df)} entries shown of {mismatched_data['VDN_LIST']['u_count']} unique VINs)"
-        render_console_table(sample_df[cols], title_vdn, header_style="bold cyan")
+        render_console_table(sample_df[cols], title_vdn, header_style="bold cyan", renamer=display_renamer)
 
     # ---------------------------------------------------------
     # PART B: GENERATE FILES
@@ -1394,44 +1524,47 @@ def main():
                     import re
                     anchor_id = re.sub(r'[^a-zA-Z0-9]+', '-', title.lower()).strip('-')
                 
-                if is_md or is_html:
-                    sub_prefix = f"## {title}" if is_md else f"<h2 id=\"{anchor_id}\">{title}</h2>"
-                    summary_lines.append(f"\n{sub_prefix}\n")
-                    md_s = df_sample.copy()
-                    # Bold/Bold-ish formatting
-                    if not md_s.empty:
-                        if is_md:
-                            md_s.iloc[:, 0] = md_s.iloc[:, 0].apply(lambda x: f"**{x}**")
-                    
-                    # Truncation logic
-                    for col in md_s.columns:
-                        md_s[col] = md_s[col].apply(lambda x: str(x)[:37] + "..." if len(str(x)) > 40 else str(x))
-                    
-                    red_indicators = ['MISMATCH', 'NOK']
-                    md_s = md_s.map(lambda x: f'<span style="color:red" class="mismatch">{x}</span>' if str(x).upper() in red_indicators else str(x))
+            # Create a display copy with renamed columns
+            r_map = {k: v for k, v in display_renamer.items() if k in df_sample.columns}
+            md_s = df_sample.rename(columns=r_map)
+
+            if is_md or is_html:
+                sub_prefix = f"## {title}" if is_md else f"<h2 id=\"{anchor_id}\">{title}</h2>"
+                summary_lines.append(f"\n{sub_prefix}\n")
+                # Bold/Bold-ish formatting
+                if not md_s.empty:
                     if is_md:
-                        summary_lines.append(md_s.to_markdown(index=False))
-                    else:
-                        summary_lines.append(f"<details><summary>View Data Samples ({len(df_sample)} shown)</summary>")
-                        summary_lines.append(md_s.to_html(index=False, escape=False))
-                        summary_lines.append("</details>")
-                elif fmt == 'rich' and has_rich:
-                    from io import StringIO
-                    capture_con = Console(file=StringIO(), force_terminal=False, width=250)
-                    tbl = Table(show_header=True, header_style=style_color, show_lines=True, box=box.ASCII)
-                    for idx, c_name in enumerate(df_sample.columns):
-                        tbl.add_column(str(c_name), overflow="fold", style="bold white" if idx == 0 else None)
-                    for _, r in df_sample.iterrows():
-                        display_vals = [str(v)[:37] + "..." if len(str(v)) > 40 else str(v) for v in r.values]
-                        styled_vals = [f"[bold red]{val}[/bold red]" if val.upper() in ['MISMATCH', 'NOK'] else val for val in display_vals]
-                        tbl.add_row(*styled_vals)
-                    capture_con.print(tbl)
-                    summary_lines.append(f"\n{title}:")
-                    summary_lines.append(capture_con.file.getvalue())
-                elif fmt == 'csv':
-                    summary_lines.append(f"\n{title}:\n" + df_sample.to_csv(index=False))
+                        md_s.iloc[:, 0] = md_s.iloc[:, 0].apply(lambda x: f"**{x}**")
+                
+                # Truncation logic
+                for col in md_s.columns:
+                    md_s[col] = md_s[col].apply(lambda x: str(x)[:37] + "..." if len(str(x)) > 40 else str(x))
+                
+                red_indicators = ['MISMATCH', 'NOK']
+                md_s = md_s.map(lambda x: f'<span style="color:red" class="mismatch">{x}</span>' if str(x).upper() in red_indicators else str(x))
+                if is_md:
+                    summary_lines.append(md_s.to_markdown(index=False))
                 else:
-                    summary_lines.append(f"\n{title}:\n" + df_sample.to_string(index=False))
+                    summary_lines.append(f"<details><summary>View Data Samples ({len(df_sample)} shown)</summary>")
+                    summary_lines.append(md_s.to_html(index=False, escape=False))
+                    summary_lines.append("</details>")
+            elif fmt == 'rich' and has_rich:
+                from io import StringIO
+                capture_con = Console(file=StringIO(), force_terminal=False, width=250)
+                tbl = Table(show_header=True, header_style=style_color, show_lines=True, box=box.ASCII)
+                for idx, c_name in enumerate(md_s.columns):
+                    tbl.add_column(str(c_name), overflow="fold", style="bold white" if idx == 0 else None)
+                for _, r in md_s.iterrows():
+                    display_vals = [str(v)[:37] + "..." if len(str(v)) > 40 else str(v) for v in r.values]
+                    styled_vals = [f"[bold red]{val}[/bold red]" if val.upper() in ['MISMATCH', 'NOK'] else val for val in display_vals]
+                    tbl.add_row(*styled_vals)
+                capture_con.print(tbl)
+                summary_lines.append(f"\n{title}:")
+                summary_lines.append(capture_con.file.getvalue())
+            elif fmt == 'csv':
+                summary_lines.append(f"\n{title}:\n" + md_s.to_csv(index=False))
+            else:
+                summary_lines.append(f"\n{title}:\n" + md_s.to_string(index=False))
             # --- TABLE OF CONTENTS ---
             sample_prefix = "" if sample_limit is None else "Samples: "
             toc_lines = []
@@ -1453,8 +1586,8 @@ def main():
                     toc_lines.append(f"- [Detailed {md['label']} Mismatch Tally](#tally-{anchor_base})")
                     toc_lines.append(f"- [{sample_prefix}{md['label']} Mismatches](#samples-{anchor_base})")
                 
-                if not missing_in_s1.empty: toc_lines.append(f"- [{sample_prefix}VINs Found Only in Source 2](#samples-missing-in-source1)")
-                if not missing_in_s2.empty: toc_lines.append(f"- [{sample_prefix}VINs Found Only in Source 1](#samples-missing-in-source2)")
+                if not missing_in_s1.empty: toc_lines.append(f"- [{sample_prefix}VINs Found Only in {args.s2_name}](#samples-missing-in-source1)")
+                if not missing_in_s2.empty: toc_lines.append(f"- [{sample_prefix}VINs Found Only in {args.s1_name}](#samples-missing-in-source2)")
                 toc_lines.append("")
             elif is_html:
                 summary_lines.append("<div class='toc'><h2>Table of Contents</h2><ul>")
@@ -1475,8 +1608,8 @@ def main():
                     summary_lines.append(f"<li><a href='#tally-{anchor_base}'>Detailed {md['label']} Mismatch Tally</a></li>")
                     summary_lines.append(f"<li><a href='#samples-{anchor_base}'>{sample_prefix}{md['label']} Mismatches</a></li>")
                 
-                if not missing_in_s1.empty: summary_lines.append(f"<li><a href='#samples-missing-in-source1'>{sample_prefix}VINs Found Only in Source 2</a></li>")
-                if not missing_in_s2.empty: summary_lines.append(f"<li><a href='#samples-missing-in-source2'>{sample_prefix}VINs Found Only in Source 1</a></li>")
+                if not missing_in_s1.empty: summary_lines.append(f"<li><a href='#samples-missing-in-source1'>{sample_prefix}VINs Found Only in {args.s2_name}</a></li>")
+                if not missing_in_s2.empty: summary_lines.append(f"<li><a href='#samples-missing-in-source2'>{sample_prefix}VINs Found Only in {args.s1_name}</a></li>")
                 summary_lines.append("</ul></div>")
 
             summary_lines.extend(toc_lines)
@@ -1485,24 +1618,24 @@ def main():
             summary_lines.append(f"{meta_prefix if is_md else '<h2 id=\"comparison-metadata\">'}Comparison Metadata{'</h2>' if is_html else ''}")
             if is_html: summary_lines.append("<ul>")
             summary_lines.extend([
-                f"- **Source 1 File**: `{Path(args.source1).name}`" if is_md else f"<li>Source 1 File: {Path(args.source1).name}</li>",
-                f"- **Source 2 File**: `{Path(args.source2).name}`" if is_md else f"<li>Source 2 File: {Path(args.source2).name}</li>",
-                f"- **Source 1 Duplicates**: {len(audit_results['s1']['dup_vins'])} unique VINs" if is_md else f"<li>Source 1 Duplicates: {len(audit_results['s1']['dup_vins'])} unique VINs</li>",
-                f"- **Source 2 Duplicates**: {len(audit_results['s2']['dup_vins'])} unique VINs" if is_md else f"<li>Source 2 Duplicates: {len(audit_results['s2']['dup_vins'])} unique VINs</li>",
+                f"- **{args.s1_name} File**: `{Path(args.source1).name}`" if is_md else f"<li>{args.s1_name} File: {Path(args.source1).name}</li>",
+                f"- **{args.s2_name} File**: `{Path(args.source2).name}`" if is_md else f"<li>{args.s2_name} File: {Path(args.source2).name}</li>",
+                f"- **{args.s1_name} Duplicates**: {len(audit_results['s1']['dup_vins'])} unique VINs" if is_md else f"<li>{args.s1_name} Duplicates: {len(audit_results['s1']['dup_vins'])} unique VINs</li>",
+                f"- **{args.s2_name} Duplicates**: {len(audit_results['s2']['dup_vins'])} unique VINs" if is_md else f"<li>{args.s2_name} Duplicates: {len(audit_results['s2']['dup_vins'])} unique VINs</li>",
             ])
             if compare_vdn:
                 summary_lines.extend([
-                    f"- **Source 1 VDN Prefix Conflicts**: {len(audit_results['s1']['prefix_conflicts'])} unique VINs" if is_md else f"<li>Source 1 VDN Prefix Conflicts: {len(audit_results['s1']['prefix_conflicts'])} unique VINs</li>",
-                    f"- **Source 2 VDN Prefix Conflicts**: {len(audit_results['s2']['prefix_conflicts'])} unique VINs" if is_md else f"<li>Source 2 VDN Prefix Conflicts: {len(audit_results['s2']['prefix_conflicts'])} unique VINs</li>",
+                    f"- **{args.s1_name} VDN Prefix Conflicts**: {len(audit_results['s1']['prefix_conflicts'])} unique VINs" if is_md else f"<li>{args.s1_name} VDN Prefix Conflicts: {len(audit_results['s1']['prefix_conflicts'])} unique VINs</li>",
+                    f"- **{args.s2_name} VDN Prefix Conflicts**: {len(audit_results['s2']['prefix_conflicts'])} unique VINs" if is_md else f"<li>{args.s2_name} VDN Prefix Conflicts: {len(audit_results['s2']['prefix_conflicts'])} unique VINs</li>",
                 ])
             summary_lines.extend([
-                f"- **Source 1 Incomplete Data**: {audit_results['s1']['u_empty_vins']} unique VINs" if is_md else f"<li>Source 1 Incomplete Data: {audit_results['s1']['u_empty_vins']} unique VINs</li>",
-                f"- **Source 2 Incomplete Data**: {audit_results['s2']['u_empty_vins']} unique VINs" if is_md else f"<li>Source 2 Incomplete Data: {audit_results['s2']['u_empty_vins']} unique VINs</li>",
+                f"- **{args.s1_name} Incomplete Data**: {audit_results['s1']['u_empty_vins']} unique VINs" if is_md else f"<li>{args.s1_name} Incomplete Data: {audit_results['s1']['u_empty_vins']} unique VINs</li>",
+                f"- **{args.s2_name} Incomplete Data**: {audit_results['s2']['u_empty_vins']} unique VINs" if is_md else f"<li>{args.s2_name} Incomplete Data: {audit_results['s2']['u_empty_vins']} unique VINs</li>",
             ])
             if args.skip_nodata:
                 summary_lines.extend([
-                    f"- **Source 1 Skipped (No-Data)**: {skipped_nodata['s1']} VINs" if is_md else f"<li>Source 1 Skipped (No-Data): {skipped_nodata['s1']} VINs</li>",
-                    f"- **Source 2 Skipped (No-Data)**: {skipped_nodata['s2']} VINs" if is_md else f"<li>Source 2 Skipped (No-Data): {skipped_nodata['s2']} VINs</li>",
+                    f"- **{args.s1_name} Skipped (No-Data)**: {skipped_nodata['s1']} VINs" if is_md else f"<li>{args.s1_name} Skipped (No-Data): {skipped_nodata['s1']} VINs</li>",
+                    f"- **{args.s2_name} Skipped (No-Data)**: {skipped_nodata['s2']} VINs" if is_md else f"<li>{args.s2_name} Skipped (No-Data): {skipped_nodata['s2']} VINs</li>",
                 ])
             summary_lines.extend([
                 f"- **Full Report**: `{full_report_path.name}`" if is_md else f"<li>Full Report: {full_report_path.name}</li>",
@@ -1518,8 +1651,8 @@ def main():
                     res = audit_results[label]
                     other_label = 's2' if label == 's1' else 's1'
                     other_res = audit_results[other_label]
-                    l_disp = "Source 1" if label == 's1' else "Source 2"
-                    other_disp = "Source 2" if label == 's1' else "Source 1"
+                    l_disp = args.s1_name if label == 's1' else args.s2_name
+                    other_disp = args.s2_name if label == 's1' else args.s1_name
                     
                     if res['skip_stats']:
                         details = []
@@ -1605,9 +1738,9 @@ def main():
                 else: summary_lines.append(f"<li>{label}: {value}</li>")
 
             if not is_md: summary_lines.append("<ul>")
-            add_line("Total Unique VINs Analyzed", f"{u_total} (Source 1: {u_s1}, Source 2: {u_s2})")
-            add_line("Unique VINs found only in Source 1", u_only_s1)
-            add_line("Unique VINs found only in Source 2", u_only_s2)
+            add_line("Total Unique VINs Analyzed", f"{u_total} ({args.s1_name}: {u_s1}, {args.s2_name}: {u_s2})")
+            add_line(f"Unique VINs found only in {args.s1_name}", u_only_s1)
+            add_line(f"Unique VINs found only in {args.s2_name}", u_only_s2)
             
             for col in existing_targets:
                 md = mismatched_data[col]
@@ -1624,28 +1757,28 @@ def main():
         else:
             summary_lines = [
                 "COMPARISON METADATA", "-"*40,
-                f"Source 1 File: {Path(args.source1).name}",
-                f"Source 2 File: {Path(args.source2).name}",
+                f"{args.s1_name} File: {Path(args.source1).name}",
+                f"{args.s2_name} File: {Path(args.source2).name}",
                 f"Full Report: {full_report_path.name}",
                 f"Mismatches: {m_path.name}",
-                f"Source 1 Dups: {len(audit_results['s1']['dup_vins'])} VINs",
-                f"Source 2 Dups: {len(audit_results['s2']['dup_vins'])} VINs",
+                f"{args.s1_name} Dups: {len(audit_results['s1']['dup_vins'])} VINs",
+                f"{args.s2_name} Dups: {len(audit_results['s2']['dup_vins'])} VINs",
             ]
             if compare_vdn:
                 summary_lines.extend([
-                    f"Source 1 VDN Conflicts: {len(audit_results['s1']['prefix_conflicts'])} VINs",
-                    f"Source 2 VDN Conflicts: {len(audit_results['s2']['prefix_conflicts'])} VINs",
+                    f"{args.s1_name} VDN Conflicts: {len(audit_results['s1']['prefix_conflicts'])} VINs",
+                    f"{args.s2_name} VDN Conflicts: {len(audit_results['s2']['prefix_conflicts'])} VINs",
                 ])
             summary_lines.extend([
-                f"Source 1 Incomplete: {audit_results['s1']['u_empty_vins']} VINs",
-                f"Source 2 Incomplete: {audit_results['s2']['u_empty_vins']} VINs",
+                f"{args.s1_name} Incomplete: {audit_results['s1']['u_empty_vins']} VINs",
+                f"{args.s2_name} Incomplete: {audit_results['s2']['u_empty_vins']} VINs",
             ])
             for label in ['s1', 's2']:
                 res = audit_results[label]
                 other_label = 's2' if label == 's1' else 's1'
                 other_res = audit_results[other_label]
-                l_disp = "Source 1" if label == 's1' else "Source 2"
-                other_disp = "Source 2" if label == 's1' else "Source 1"
+                l_disp = args.s1_name if label == 's1' else args.s2_name
+                other_disp = args.s2_name if label == 's1' else args.s1_name
                 if res['skip_stats']:
                     details = []
                     for col, vals in res['skip_stats'].items():
@@ -1675,14 +1808,14 @@ def main():
 
             if args.skip_nodata:
                 summary_lines.extend([
-                    f"Source 1 Skipped (No-Data): {skipped_nodata['s1']} VINs",
-                    f"Source 2 Skipped (No-Data): {skipped_nodata['s2']} VINs",
+                    f"{args.s1_name} Skipped (No-Data): {skipped_nodata['s1']} VINs",
+                    f"{args.s2_name} Skipped (No-Data): {skipped_nodata['s2']} VINs",
                 ])
             summary_lines.extend([
                 "\nCOMPARISON RESULTS", "="*80,
-                f"Total Unique VINs Analyzed: {u_total} (Source 1: {u_s1}, Source 2: {u_s2})",
-                f"Unique VINs found only in Source 1: {u_only_s1}",
-                f"Unique VINs found only in Source 2: {u_only_s2}"
+                f"Total Unique VINs Analyzed: {u_total} ({args.s1_name}: {u_s1}, {args.s2_name}: {u_s2})",
+                f"Unique VINs found only in {args.s1_name}: {u_only_s1}",
+                f"Unique VINs found only in {args.s2_name}: {u_only_s2}"
             ])
             
             for col in existing_targets:
@@ -1703,20 +1836,22 @@ def main():
             # A. Special handling for SW Matrix
             if col == 'CONSUMER_SW_VERSION':
                 # Reuse the pre-computed crosstab (avoids redundant computation)
-                header_text = "SW VERSION MISMATCH MATRIX (Source 1 vs Source 2)"
+                header_text = f"SW VERSION MISMATCH MATRIX ({args.s1_name} vs {args.s2_name})"
                 anchor_id = "sw-mismatch-matrix"
                 if is_md or is_html:
                     sub_prefix = f"## {header_text}" if is_md else f"<h2 id=\"{anchor_id}\">{header_text}</h2>"
                     summary_lines.append(f"\n{sub_prefix}\n")
                     disp_matrix = sw_matrix_df.map(lambda x: f'<span class="mismatch" style="color:red">{x}</span>' if str(x).isdigit() and int(x) > 0 else str(x))
-                    matrix_styled = disp_matrix.reset_index().rename(columns={'s1_sw': 'Source 1 SW(row)\\Source 2 SW(col)'})
+                    r_map_sw = {k: v for k, v in display_renamer.items() if k in disp_matrix.columns}
+                    matrix_styled = disp_matrix.reset_index().rename(columns={'s1_sw': f'{args.s1_name} SW(row)\\{args.s2_name} SW(col)'})
+                    matrix_styled = matrix_styled.rename(columns=r_map_sw)
                     matrix_styled.columns.name = None
                     if is_md: summary_lines.append(matrix_styled.to_markdown(index=False))
                     else: summary_lines.append(matrix_styled.to_html(index=False, escape=False))
                 elif fmt == 'rich' and has_rich:
                     from io import StringIO
                     capture_console = Console(file=StringIO(), force_terminal=False, width=250)
-                    matrix_df_reset = sw_matrix_df.reset_index().rename(columns={'s1_sw': 'Source 1 SW(row)\\Source 2 SW(col)'})
+                    matrix_df_reset = sw_matrix_df.reset_index().rename(columns={'s1_sw': f'{args.s1_name} SW(row)\\{args.s2_name} SW(col)'})
                     table = Table(show_header=True, header_style="bold magenta", show_lines=True, box=box.ASCII)
                     for i, c_name in enumerate(matrix_df_reset.columns): table.add_column(str(c_name), overflow="fold", style="bold magenta" if i == 0 else None)
                     for _, row in matrix_df_reset.iterrows(): table.add_row(*[f"[bold red]{val}[/bold red]" if str(val).isdigit() and int(val) > 0 else str(val) for val in row.values])
@@ -1738,11 +1873,15 @@ def main():
             if is_md or is_html:
                 sub_prefix = f"## {t_title}" if is_md else f"<h2 id=\"{t_anchor}\">{t_title}</h2>"
                 summary_lines.append(f"\n{sub_prefix}\n")
-                if is_md: summary_lines.append(t_df.to_markdown(index=False))
-                else: summary_lines.append(t_df.to_html(index=False, escape=False))
+                # Rename columns for display
+                r_map_t = {k: v for k, v in display_renamer.items() if k in t_df.columns}
+                t_df_disp = t_df.rename(columns=r_map_t)
+                if is_md: summary_lines.append(t_df_disp.to_markdown(index=False))
+                else: summary_lines.append(t_df_disp.to_html(index=False, escape=False))
             else:
                 summary_lines.append(f"\n{t_title}:")
-                summary_lines.append(t_df.to_string(index=False))
+                r_map_t = {k: v for k, v in display_renamer.items() if k in t_df.columns}
+                summary_lines.append(t_df.rename(columns=r_map_t).to_string(index=False))
 
             # C. Samples Section
             df_sampled = md['df'].head(sample_limit) if sample_limit else md['df']
@@ -1759,7 +1898,7 @@ def main():
         # 4. Missing VIN Sections
         if not missing_in_s1.empty:
             df_ms = missing_in_s1.head(sample_limit) if sample_limit else missing_in_s1
-            title_ms = f"{'SAMPLES: ' if sample_limit else ''}VINs MISSING IN SOURCE 1 ({len(df_ms)} entries out of total {len(missing_in_s1)} findings)"
+            title_ms = f"{'SAMPLES: ' if sample_limit else ''}VINs MISSING IN {args.s1_name} ({len(df_ms)} entries out of total {len(missing_in_s1)} findings)"
             report_cols_ms = ['vin']
             for col in existing_targets:
                 if col == 'VDN_LIST':
@@ -1771,7 +1910,7 @@ def main():
             
         if not missing_in_s2.empty:
             df_mt = missing_in_s2.head(sample_limit) if sample_limit else missing_in_s2
-            title_mt = f"{'SAMPLES: ' if sample_limit else ''}VINs MISSING IN SOURCE 2 ({len(df_mt)} entries out of total {len(missing_in_s2)} findings)"
+            title_mt = f"{'SAMPLES: ' if sample_limit else ''}VINs MISSING IN {args.s2_name} ({len(df_mt)} entries out of total {len(missing_in_s2)} findings)"
             report_cols_mt = ['vin']
             for col in existing_targets:
                 if col == 'VDN_LIST':
