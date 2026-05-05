@@ -955,6 +955,8 @@ class VDNCompareGUI:
             "use_default_input": True,
             "source1": self.s1_var.get(),
             "source2": self.s2_var.get(),
+            "s1_name": self.s1_name_var.get(),
+            "s2_name": self.s2_name_var.get(),
             "s1_map": s1_map,
             "s2_map": s2_map,
             "skip_nodata": bool(self.skip_nodata_var.get()),

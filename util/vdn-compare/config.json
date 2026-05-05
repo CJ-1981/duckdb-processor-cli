@@ -16,10 +16,12 @@
         "html"
     ],
     "samples": "10",
-    "sort_vin": true,
+    "sort_vin": "asc",
     "use_default_input": true,
     "source1": "C:/Users/Chimin.Jung/OneDrive - Lotus Tech Innovation Centre GmbH/Documents/Obsidian Vault/scripts/duckdb-processor-cli/util/vdn-compare/input/20260504/VDN_SW-comparison_DB-export_20260504.xlsx",
     "source2": "C:/Users/Chimin.Jung/OneDrive - Lotus Tech Innovation Centre GmbH/Documents/Obsidian Vault/scripts/duckdb-processor-cli/util/vdn-compare/input/20260504/EX30_VDN_list_report_20260504.csv",
+    "s1_name": "OTA",
+    "s2_name": "PIE",
     "s1_map": {
         "vin": "VIN",
         "DB_SW": "CONSUMER_SW_VERSION",
@@ -35,7 +37,6 @@
         "REGION": "REGION"
     },
     "skip_nodata": false,
-    "normalize_custom": {},
     "skip_filter": {
         "REGION": "CN",
         "VIN": [
@@ -78,6 +79,7 @@
             "YV12ZEL02T2700001"
         ]
     },
+    "normalize_custom": {},
     "vdn_ignore": [
         "9T00",
         "FALS",

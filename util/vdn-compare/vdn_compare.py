@@ -1524,47 +1524,47 @@ def main():
                     import re
                     anchor_id = re.sub(r'[^a-zA-Z0-9]+', '-', title.lower()).strip('-')
                 
-            # Create a display copy with renamed columns
-            r_map = {k: v for k, v in display_renamer.items() if k in df_sample.columns}
-            md_s = df_sample.rename(columns=r_map)
+                # Create a display copy with renamed columns
+                r_map = {k: v for k, v in display_renamer.items() if k in df_sample.columns}
+                md_s = df_sample.rename(columns=r_map)
 
-            if is_md or is_html:
-                sub_prefix = f"## {title}" if is_md else f"<h2 id=\"{anchor_id}\">{title}</h2>"
-                summary_lines.append(f"\n{sub_prefix}\n")
-                # Bold/Bold-ish formatting
-                if not md_s.empty:
+                if is_md or is_html:
+                    sub_prefix = f"## {title}" if is_md else f"<h2 id=\"{anchor_id}\">{title}</h2>"
+                    summary_lines.append(f"\n{sub_prefix}\n")
+                    # Bold/Bold-ish formatting
+                    if not md_s.empty:
+                        if is_md:
+                            md_s.iloc[:, 0] = md_s.iloc[:, 0].apply(lambda x: f"**{x}**")
+                    
+                    # Truncation logic
+                    for col in md_s.columns:
+                        md_s[col] = md_s[col].apply(lambda x: str(x)[:37] + "..." if len(str(x)) > 40 else str(x))
+                    
+                    red_indicators = ['MISMATCH', 'NOK']
+                    md_s = md_s.map(lambda x: f'<span style="color:red" class="mismatch">{x}</span>' if str(x).upper() in red_indicators else str(x))
                     if is_md:
-                        md_s.iloc[:, 0] = md_s.iloc[:, 0].apply(lambda x: f"**{x}**")
-                
-                # Truncation logic
-                for col in md_s.columns:
-                    md_s[col] = md_s[col].apply(lambda x: str(x)[:37] + "..." if len(str(x)) > 40 else str(x))
-                
-                red_indicators = ['MISMATCH', 'NOK']
-                md_s = md_s.map(lambda x: f'<span style="color:red" class="mismatch">{x}</span>' if str(x).upper() in red_indicators else str(x))
-                if is_md:
-                    summary_lines.append(md_s.to_markdown(index=False))
+                        summary_lines.append(md_s.to_markdown(index=False))
+                    else:
+                        summary_lines.append(f"<details><summary>View Data Samples ({len(df_sample)} shown)</summary>")
+                        summary_lines.append(md_s.to_html(index=False, escape=False))
+                        summary_lines.append("</details>")
+                elif fmt == 'rich' and has_rich:
+                    from io import StringIO
+                    capture_con = Console(file=StringIO(), force_terminal=False, width=250)
+                    tbl = Table(show_header=True, header_style=style_color, show_lines=True, box=box.ASCII)
+                    for idx, c_name in enumerate(md_s.columns):
+                        tbl.add_column(str(c_name), overflow="fold", style="bold white" if idx == 0 else None)
+                    for _, r in md_s.iterrows():
+                        display_vals = [str(v)[:37] + "..." if len(str(v)) > 40 else str(v) for v in r.values]
+                        styled_vals = [f"[bold red]{val}[/bold red]" if val.upper() in ['MISMATCH', 'NOK'] else val for val in display_vals]
+                        tbl.add_row(*styled_vals)
+                    capture_con.print(tbl)
+                    summary_lines.append(f"\n{title}:")
+                    summary_lines.append(capture_con.file.getvalue())
+                elif fmt == 'csv':
+                    summary_lines.append(f"\n{title}:\n" + md_s.to_csv(index=False))
                 else:
-                    summary_lines.append(f"<details><summary>View Data Samples ({len(df_sample)} shown)</summary>")
-                    summary_lines.append(md_s.to_html(index=False, escape=False))
-                    summary_lines.append("</details>")
-            elif fmt == 'rich' and has_rich:
-                from io import StringIO
-                capture_con = Console(file=StringIO(), force_terminal=False, width=250)
-                tbl = Table(show_header=True, header_style=style_color, show_lines=True, box=box.ASCII)
-                for idx, c_name in enumerate(md_s.columns):
-                    tbl.add_column(str(c_name), overflow="fold", style="bold white" if idx == 0 else None)
-                for _, r in md_s.iterrows():
-                    display_vals = [str(v)[:37] + "..." if len(str(v)) > 40 else str(v) for v in r.values]
-                    styled_vals = [f"[bold red]{val}[/bold red]" if val.upper() in ['MISMATCH', 'NOK'] else val for val in display_vals]
-                    tbl.add_row(*styled_vals)
-                capture_con.print(tbl)
-                summary_lines.append(f"\n{title}:")
-                summary_lines.append(capture_con.file.getvalue())
-            elif fmt == 'csv':
-                summary_lines.append(f"\n{title}:\n" + md_s.to_csv(index=False))
-            else:
-                summary_lines.append(f"\n{title}:\n" + md_s.to_string(index=False))
+                    summary_lines.append(f"\n{title}:\n" + md_s.to_string(index=False))
             # --- TABLE OF CONTENTS ---
             sample_prefix = "" if sample_limit is None else "Samples: "
             toc_lines = []
@@ -1870,18 +1870,18 @@ def main():
                 t_df = md['df'].groupby([md['s_col'], md['t_col']]).size().reset_index(name='Count')
                 t_df = t_df.sort_values('Count', ascending=False)
             
+            # Apply robust renaming to the tally dataframe
+            t_rename_map = {c: display_renamer.get(c, display_renamer.get(c.lower(), display_renamer.get(c.upper(), c))) for c in t_df.columns}
+            t_df_disp = t_df.rename(columns=t_rename_map)
+            
             if is_md or is_html:
                 sub_prefix = f"## {t_title}" if is_md else f"<h2 id=\"{t_anchor}\">{t_title}</h2>"
                 summary_lines.append(f"\n{sub_prefix}\n")
-                # Rename columns for display
-                r_map_t = {k: v for k, v in display_renamer.items() if k in t_df.columns}
-                t_df_disp = t_df.rename(columns=r_map_t)
                 if is_md: summary_lines.append(t_df_disp.to_markdown(index=False))
                 else: summary_lines.append(t_df_disp.to_html(index=False, escape=False))
             else:
                 summary_lines.append(f"\n{t_title}:")
-                r_map_t = {k: v for k, v in display_renamer.items() if k in t_df.columns}
-                summary_lines.append(t_df.rename(columns=r_map_t).to_string(index=False))
+                summary_lines.append(t_df_disp.to_string(index=False))
 
             # C. Samples Section
             df_sampled = md['df'].head(sample_limit) if sample_limit else md['df']
