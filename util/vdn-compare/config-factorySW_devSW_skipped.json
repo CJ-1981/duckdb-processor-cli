@@ -40,6 +40,10 @@
     "skip_nodata": false,
     "skip_filter": {
         "REGION": "CN",
+        "SW": [
+            "Dev SW",
+            "Factory SW"
+        ],
         "VIN": [
             "YV4EL3YK7SS036678",
             "YV4EK3ZL7SS036674",

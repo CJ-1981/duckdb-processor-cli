@@ -1,5 +1,24 @@
 import os
 import sys
+import importlib.metadata
+
+# --- PyInstaller / DuckDB Metadata Workaround ---
+# DuckDB 0.10.0+ requires package metadata to import. PyInstaller often strips this.
+if getattr(sys, 'frozen', False):
+    try:
+        importlib.metadata.version('duckdb')
+    except importlib.metadata.PackageNotFoundError:
+        _orig_version = importlib.metadata.version
+        def _fixed_version(package_name):
+            try:
+                return _orig_version(package_name)
+            except importlib.metadata.PackageNotFoundError:
+                if package_name.lower() == 'duckdb':
+                    return '0.10.0'
+                raise
+        importlib.metadata.version = _fixed_version
+# ------------------------------------------------
+
 import io
 import gc
 import time
@@ -1259,7 +1278,7 @@ def main():
     # Build a comprehensive renamer for all possible internal column names to display names
     display_renamer = {
         'vin': 'VIN', 'Result': 'Result', 'Count': 'Count',
-        'VIN_in_s1': f'Found in {args.s1_name}', 'VIN_in_s2': f'Found in {args.s2_name}',
+        'VIN_in_s1': f'VIN in {args.s1_name}', 'VIN_in_s2': f'VIN in {args.s2_name}',
         'Only in S1': f'Only in {args.s1_name}', 'Only in S2': f'Only in {args.s2_name}',
         's1_sw': f'{args.s1_name} SW', 's2_sw': f'{args.s2_name} SW',
         's1_model': f'{args.s1_name} Model', 's2_model': f'{args.s2_name} Model',

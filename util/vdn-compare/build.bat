@@ -26,6 +26,7 @@ pyinstaller ^
     --console ^
     --name vdn_compare ^
     --collect-all duckdb ^
+    --copy-metadata duckdb ^
     --collect-all rich ^
     --hidden-import pandas ^
     --hidden-import openpyxl ^

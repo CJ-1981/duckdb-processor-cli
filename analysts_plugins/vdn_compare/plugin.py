@@ -540,8 +540,8 @@ class VdnComparePlugin(BaseAnalyzer):
         # Build renamer for CSV headers using dynamic labels
         display_renamer = {
             'vin': 'VIN', 'Result': 'Result',
-            'source_exists': f'Found in {source_label}', 
-            'target_exists': f'Found in {target_label}',
+            'source_exists': f'VIN in {source_label}', 
+            'target_exists': f'VIN in {target_label}',
             'source_sw': f'{source_label} SW', 'target_sw': f'{target_label} SW',
             'source_model': f'{source_label} Model', 'target_model': f'{target_label} Model',
             'Only in Source (missing in Target)': f'Only in {source_label}',
