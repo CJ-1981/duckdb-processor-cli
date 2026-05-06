@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 import fnmatch
 
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 
 # Null-like string values produced by pandas/Excel that should be treated as missing data.
 # Centralised here so they're easy to extend without hunting through the codebase.
@@ -121,33 +121,6 @@ def preprocess_df(
         df[col] = df[col].astype(str).str.strip().str.replace(r'^"|"$', '', regex=True)
         df[col] = df[col].replace(_NULL_SENTINELS)
 
-    # 2b. Apply Skip Filters (Exclude certain rows early)
-    if skip_filters:
-        for f_col, f_vals in skip_filters.items():
-            # Case-insensitive column matching
-            target_col = next((c for c in df.columns if c.lower() == f_col.lower()), None)
-            if target_col:
-                if not isinstance(f_vals, list):
-                    f_vals = [f_vals]
-                
-                col_skip_details = {}
-                for val in f_vals:
-                    val_s = str(val).strip()
-                    mask = df[target_col].astype(str).str.strip().str.upper() == val_s.upper()
-                    skip_count = mask.sum()
-                    if skip_count > 0:
-                        # Track VINs being removed so we can annotate the export later
-                        if 'VIN' in df.columns:
-                            stats['skipped_vins'].update(
-                                df.loc[mask, 'VIN'].dropna().astype(str).tolist()
-                            )
-                        df = df[~mask].copy()
-                        col_skip_details[val_s] = int(skip_count)
-                
-                if col_skip_details:
-                    stats['skip_stats'][target_col] = col_skip_details
-                    val_summary = ", ".join(f"{v}({count})" for v, count in col_skip_details.items())
-                    cprint(f"[yellow]Filtered {sum(col_skip_details.values())} rows from {label} based on '{target_col}' filters [{val_summary}][/yellow]")
 
     # 2c. Custom business logic normalization for Model comparison
     if compare_model and 'MODEL' in df.columns:
@@ -159,12 +132,18 @@ def preprocess_df(
             if len(models) > 1:
                 primary = models[0]
                 for alias in models[1:]:
-                    mask = df['MODEL'] == alias
+                    if alias == "":
+                        mask = df['MODEL'].isna()
+                        alias_label = "EMPTY"
+                    else:
+                        mask = df['MODEL'] == alias
+                        alias_label = alias
+
                     affected = mask.sum()
                     if affected > 0:
                         df.loc[mask, 'MODEL_NORM'] = primary
-                        df.loc[mask, 'MODEL_DISPLAY'] = f"{primary}({alias})"
-                        mapping_key = f"{alias} -> {primary}"
+                        df.loc[mask, 'MODEL_DISPLAY'] = f"{primary}({alias_label})"
+                        mapping_key = f"{alias_label} -> {primary}"
                         model_norm_details[mapping_key] = model_norm_details.get(mapping_key, 0) + int(affected)
         if model_norm_details:
             stats['norm_stats']['MODEL'] = model_norm_details
@@ -182,12 +161,18 @@ def preprocess_df(
                 if len(versions) > 1:
                     primary = versions[0]
                     for alias in versions[1:]:
-                        mask = df['CONSUMER_SW_VERSION'] == alias
+                        if alias == "":
+                            mask = df['CONSUMER_SW_VERSION'].isna()
+                            alias_label = "EMPTY"
+                        else:
+                            mask = df['CONSUMER_SW_VERSION'] == alias
+                            alias_label = alias
+
                         affected = mask.sum()
                         if affected > 0:
                             df.loc[mask, 'SW_NORM'] = primary
-                            df.loc[mask, 'SW_DISPLAY'] = f"{primary}({alias})"
-                            mapping_key = f"{alias} -> {primary}"
+                            df.loc[mask, 'SW_DISPLAY'] = f"{primary}({alias_label})"
+                            mapping_key = f"{alias_label} -> {primary}"
                             sw_norm_details[mapping_key] = sw_norm_details.get(mapping_key, 0) + int(affected)
         if sw_norm_details:
             stats['norm_stats']['SW'] = sw_norm_details
@@ -210,17 +195,68 @@ def preprocess_df(
                     if len(items) > 1:
                         primary = items[0]
                         for alias in items[1:]:
-                            mask = df[norm_col] == alias
+                            if alias == "":
+                                mask = df[norm_col].isna()
+                                alias_label = "EMPTY"
+                            else:
+                                mask = df[norm_col] == alias
+                                alias_label = alias
+
                             affected = mask.sum()
                             if affected > 0:
                                 df.loc[mask, col_norm] = primary
-                                df.loc[mask, col_disp] = f"{primary}({alias})"
-                                mapping_key = f"{alias} -> {primary}"
+                                df.loc[mask, col_disp] = f"{primary}({alias_label})"
+                                mapping_key = f"{alias_label} -> {primary}"
                                 col_norm_details[mapping_key] = col_norm_details.get(mapping_key, 0) + int(affected)
                 if col_norm_details:
                     stats['norm_stats'][norm_col] = col_norm_details
                     map_summary = ", ".join(f"{m}({count})" for m, count in col_norm_details.items())
                     cprint(f"[cyan]Normalized {sum(col_norm_details.values())} rows in {label} for '{norm_col}' [{map_summary}][/cyan]")
+
+    # 2f. Apply Skip Filters (Now moved after normalization to allow skipping based on normalized values)
+    if skip_filters:
+        for f_col, f_vals in skip_filters.items():
+            # Strategy: Check for normalized column version first (which handles Model, SW, and Generic)
+            # if that doesn't exist, fall back to the original source column.
+            target_col = None
+            
+            # 1. Special case for SW (it uses SW_NORM instead of CONSUMER_SW_VERSION_NORM)
+            if f_col.lower() == 'consumer_sw_version':
+                if 'SW_NORM' in df.columns: target_col = 'SW_NORM'
+            
+            # 2. General case for Model or Generic columns (they use {COL}_NORM)
+            if not target_col:
+                norm_key = f"{f_col}_NORM"
+                target_col = next((c for c in df.columns if c.lower() == norm_key.lower()), None)
+            
+            # 3. Fallback to original column name
+            if not target_col:
+                target_col = next((c for c in df.columns if c.lower() == f_col.lower()), None)
+                
+            if target_col:
+                if not isinstance(f_vals, list):
+                    f_vals = [f_vals]
+                
+                col_skip_details = {}
+                for val in f_vals:
+                    val_s = str(val).strip()
+                    # We match against the cleaned/normalized values
+                    mask = df[target_col].astype(str).str.strip().str.upper() == val_s.upper()
+                    skip_count = mask.sum()
+                    if skip_count > 0:
+                        # Track VINs being removed so we can annotate the export later
+                        if 'VIN' in df.columns:
+                            stats['skipped_vins'].update(
+                                df.loc[mask, 'VIN'].dropna().astype(str).tolist()
+                            )
+                        df = df[~mask].copy()
+                        col_skip_details[val_s] = int(skip_count)
+                
+                if col_skip_details:
+                    stats['skip_stats'][target_col] = col_skip_details
+                    val_summary = ", ".join(f"{v}({count})" for v, count in col_skip_details.items())
+                    cprint(f"[yellow]Filtered {sum(col_skip_details.values())} rows from {label} based on '{target_col}' filters [{val_summary}][/yellow]")
+
     return df, stats
 
 
@@ -1032,11 +1068,11 @@ def main():
             s1_data_cols = [c for c in _data_cols if c.startswith('s1_') or c in ('Only in S1',)]
             for dc in s1_data_cols:
                 result_df.loc[s1_skip_mask, dc] = 'SKIPPED'
-            # Mark match columns as MISMATCH (row was excluded, so comparison is void)
+            # Mark match columns as MATCH (row was excluded, so we treat it as an intentional non-difference)
             match_cols = [c for c in _data_cols if c.endswith('_match') or c in ('vdn_match', 'sw_match', 'model_match')]
             for mc in match_cols:
-                result_df.loc[s1_skip_mask, mc] = 'MISMATCH'
-            result_df.loc[s1_skip_mask, 'Result'] = 'NOK'
+                result_df.loc[s1_skip_mask, mc] = 'MATCH'
+            result_df.loc[s1_skip_mask, 'Result'] = 'OK'
 
     if skipped_vins_s2:
         s2_skip_mask = (result_df['VIN_in_s2'] == 0) & result_df['vin'].isin(skipped_vins_s2)
@@ -1047,8 +1083,8 @@ def main():
                 result_df.loc[s2_skip_mask, dc] = 'SKIPPED'
             match_cols = [c for c in _data_cols if c.endswith('_match') or c in ('vdn_match', 'sw_match', 'model_match')]
             for mc in match_cols:
-                result_df.loc[s2_skip_mask, mc] = 'MISMATCH'
-            result_df.loc[s2_skip_mask, 'Result'] = 'NOK'
+                result_df.loc[s2_skip_mask, mc] = 'MATCH'
+            result_df.loc[s2_skip_mask, 'Result'] = 'OK'
 
     # Advanced logic for Python-side extraction of VDN differences (Optimized)
     # Initialize with a safe default to prevent NameError if compare_vdn is False
@@ -1214,26 +1250,16 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path('output')
     output_dir.mkdir(exist_ok=True)
-    
     full_report_path = output_dir / f"full_comparison_results_{timestamp}.csv"
     m_path = output_dir / f"mismatch-only_{timestamp}.csv"
-    
-    # Always save full report as CSV (Scalability/Performance)
-    save_dataframe(final_output, full_report_path, 'csv')
 
-    # Always save mismatches only as CSV
-    mismatches_only = final_output[final_output['Result'] == 'NOK']
-    save_dataframe(mismatches_only, m_path, 'csv')
-
-    # Iterate through requested formats to generate summary files
-    req_formats = list(set(f.lower() for f in args.format))
-    
     # ---------------------------------------------------------
-    # PART A: CONSOLE OUTPUT
+    # PART A: EXPORT PREPARATION (Renaming Headers)
     # ---------------------------------------------------------
     # Build a comprehensive renamer for all possible internal column names to display names
     display_renamer = {
         'vin': 'VIN', 'Result': 'Result', 'Count': 'Count',
+        'VIN_in_s1': f'Found in {args.s1_name}', 'VIN_in_s2': f'Found in {args.s2_name}',
         'Only in S1': f'Only in {args.s1_name}', 'Only in S2': f'Only in {args.s2_name}',
         's1_sw': f'{args.s1_name} SW', 's2_sw': f'{args.s2_name} SW',
         's1_model': f'{args.s1_name} Model', 's2_model': f'{args.s2_name} Model',
@@ -1250,6 +1276,23 @@ def main():
         m_col = f"{col.lower()}_match"
         if m_col not in display_renamer:
             display_renamer[m_col] = f"{col} Match"
+
+    # Always save full report as CSV (Scalability/Performance)
+    # Apply renaming to export copy to ensure user aliases appear in Excel/CSV
+    full_report_export = final_output.rename(columns=display_renamer)
+    save_dataframe(full_report_export, full_report_path, 'csv')
+
+    # Always save mismatches only as CSV
+    mismatches_only = final_output[final_output['Result'] == 'NOK']
+    mismatches_export = mismatches_only.rename(columns=display_renamer)
+    save_dataframe(mismatches_export, m_path, 'csv')
+
+    # Iterate through requested formats to generate summary files
+    req_formats = list(set(f.lower() for f in args.format))
+    
+    # ---------------------------------------------------------
+    # PART B: CONSOLE OUTPUT
+    # ---------------------------------------------------------
 
     is_md = False # For console print
     summary_lines_console = [
@@ -1751,7 +1794,51 @@ def main():
 
             if is_html:
                 # Add data-grid optimized HTML boilerplate
-                html_style = "<style>body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#333;margin:20px;background:#fff}h1,h2{color:#2c3e50;border-bottom:2px solid #eee;padding-bottom:5px;margin-top:20px}h1:first-child,h2:first-child{margin-top:0}table{border-collapse:collapse;margin-bottom:30px;font-size:13px;width:auto;min-width:50%;max-width:none}th,td{border:1px solid #dcdcdc;padding:6px 10px;text-align:left;vertical-align:top;white-space:nowrap}th{background:#34495e;color:#fff;font-weight:600;white-space:nowrap;position:sticky;top:0}tr:nth-child(even){background:#f8f9fa}tr:hover{background:#e9ecef}.mismatch{color:#e74c3c;font-weight:bold}ul{margin-bottom:20px}li{margin-bottom:5px}.toc{background:#fdfdfd;border:1px solid #eee;padding:15px;border-radius:5px;display:inline-block;min-width:300px}.toc h2{margin-top:0}.toc ul{margin-bottom:0}.back-to-top{position:fixed;bottom:20px;right:20px;background:#34495e;color:#fff;padding:10px 15px;border-radius:5px;text-decoration:none;font-weight:600;font-size:12px;box-shadow:0 2px 5px rgba(0,0,0,0.2);z-index:1000}.back-to-top:hover{background:#2c3e50}details{margin:10px 0;border:1px solid #eee;border-radius:4px;padding:5px}summary{cursor:pointer;font-weight:600;color:#3498db}summary:hover{text-decoration:underline}details[open]{background:#fafafa}</style>"
+                # Add data-grid optimized HTML boilerplate
+                html_style = (
+                    "<style>"
+                    "body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#333;margin:20px;background:#fff}"
+                    "h1,h2{color:#2c3e50;border-bottom:2px solid #eee;padding-bottom:5px;margin-top:20px}"
+                    "h1:first-child,h2:first-child{margin-top:0}"
+                    "table{border-collapse:collapse;margin-bottom:30px;font-size:13px;width:auto;min-width:50%;max-width:none}"
+                    "th,td{border:1px solid #dcdcdc;padding:6px 10px;text-align:left;vertical-align:top;white-space:nowrap}"
+                    "th{background:#34495e;color:#fff;font-weight:600;white-space:nowrap;position:sticky;top:0;z-index:10}"
+                    "tr:nth-child(even){background:#f8f9fa}"
+                    "tr:hover{background:#e9ecef}"
+                    ".col-hover{background-color:#f1f3f5 !important}"
+                    ".mismatch{color:#e74c3c;font-weight:bold}"
+                    "ul{margin-bottom:20px}li{margin-bottom:5px}"
+                    ".toc{background:#fdfdfd;border:1px solid #eee;padding:15px;border-radius:5px;display:inline-block;min-width:300px}"
+                    ".toc h2{margin-top:0}.toc ul{margin-bottom:0}"
+                    ".back-to-top{position:fixed;bottom:20px;right:20px;background:#34495e;color:#fff;padding:10px 15px;border-radius:5px;text-decoration:none;font-weight:600;font-size:12px;box-shadow:0 2px 5px rgba(0,0,0,0.2);z-index:1000}"
+                    ".back-to-top:hover{background:#2c3e50}"
+                    "details{margin:10px 0;border:1px solid #eee;border-radius:4px;padding:5px}"
+                    "summary{cursor:pointer;font-weight:600;color:#3498db}"
+                    "summary:hover{text-decoration:underline}details[open]{background:#fafafa}"
+                    "</style>"
+                    "<script>"
+                    "document.addEventListener('DOMContentLoaded', function() {"
+                    "  document.querySelectorAll('table').forEach(table => {"
+                    "    table.querySelectorAll('td').forEach(cell => {"
+                    "      cell.addEventListener('mouseenter', function() {"
+                    "        const colIndex = this.cellIndex;"
+                    "        Array.from(table.rows).forEach(row => {"
+                    "          const target = row.cells[colIndex];"
+                    "          if (target && target.tagName === 'TD') target.classList.add('col-hover');"
+                    "        });"
+                    "      });"
+                    "      cell.addEventListener('mouseleave', function() {"
+                    "        const colIndex = this.cellIndex;"
+                    "        Array.from(table.rows).forEach(row => {"
+                    "          const target = row.cells[colIndex];"
+                    "          if (target && target.tagName === 'TD') target.classList.remove('col-hover');"
+                    "        });"
+                    "      });"
+                    "    });"
+                    "  });"
+                    "});"
+                    "</script>"
+                )
                 html_head = f"<!DOCTYPE html>\n<html>\n<head>\n<meta charset='utf-8'>\n<title>VDN Comparison Report</title>\n{html_style}\n</head>\n<body>\n<a href='#' class='back-to-top'>TOP &uarr;</a>"
                 summary_lines.insert(0, html_head)
         else:

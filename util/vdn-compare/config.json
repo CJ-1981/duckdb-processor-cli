@@ -10,7 +10,8 @@
         "EX30 CC,V216-CC"
     ],
     "normalize_sw": [
-        "MY27 J1,27 J1"
+        "Factory SW,,Volvo Cars OS 1.0,T 1.0.0",
+        "Dev SW,1.8-0121,1.9,1.9.2,2.0.2,KR-IP30R3-MP8,KR-IP30R4-5.7,Volvo Cars OS2.5,Volvo Cars OS1.9,1.8NEW_KR,FFFF,MY27-TT Official,MY27 J1,27 J1"
     ],
     "format": [
         "html"
@@ -39,6 +40,10 @@
     "skip_nodata": false,
     "skip_filter": {
         "REGION": "CN",
+        "SW": [
+            "Dev SW",
+            "Factory SW"
+        ],
         "VIN": [
             "YV4EL3YK7SS036678",
             "YV4EK3ZL7SS036674",

@@ -537,9 +537,29 @@ class VdnComparePlugin(BaseAnalyzer):
         full_report_path = f"output/full_comparison_results_{timestamp}.csv"
         m_path           = f"output/mismatch-only_{timestamp}.csv"
 
-        _save_dataframe(final_output, full_report_path, 'csv')
+        # Build renamer for CSV headers using dynamic labels
+        display_renamer = {
+            'vin': 'VIN', 'Result': 'Result',
+            'source_exists': f'Found in {source_label}', 
+            'target_exists': f'Found in {target_label}',
+            'source_sw': f'{source_label} SW', 'target_sw': f'{target_label} SW',
+            'source_model': f'{source_label} Model', 'target_model': f'{target_label} Model',
+            'Only in Source (missing in Target)': f'Only in {source_label}',
+            'Only in Target (missing in Source)': f'Only in {target_label}',
+            'sw_match': 'SW Match', 'model_match': 'Model Match', 'vdn_match': 'VDN Match'
+        }
+        for col in existing_targets:
+            # Map source_col and target_col to user-friendly labels
+            display_renamer[f"source_{col.lower()}"] = f"{source_label} {col}"
+            display_renamer[f"target_{col.lower()}"] = f"{target_label} {col}"
+            m_col = f"{col.lower()}_match"
+            if m_col not in display_renamer:
+                display_renamer[m_col] = f"{col} Match"
+
+        # Apply renaming to export copies
+        _save_dataframe(final_output.rename(columns=display_renamer), full_report_path, 'csv')
         mismatches_only = final_output[final_output['Result'] == 'NOK']
-        _save_dataframe(mismatches_only, m_path, 'csv')
+        _save_dataframe(mismatches_only.rename(columns=display_renamer), m_path, 'csv')
 
         # ── 9. Console output ─────────────────────────────────
         summary_stats = [
@@ -740,7 +760,7 @@ class VdnComparePlugin(BaseAnalyzer):
             _cprint(f"[green]Saved Summary ({fmt}) to[/green] [bold white]{curr_summary_path}[/bold white]")
 
         # ── 11. Expose result to CLI pipeline ─────────────────
-        p.last_result  = final_output
+        p.last_result  = final_output.rename(columns=display_renamer)
         p.last_action  = "vdn_compare"
 
         duration = time.time() - start_time

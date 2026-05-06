@@ -5,7 +5,7 @@ A high-performance Python utility for comparing vehicle software versions, model
 ## Key Features
 
 - **Master Configuration System**: Control every aspect of the tool (normalization, formats, samples, mappings) via a central `config.json`.
-- **Normalization Engine**: Group equivalent Model names or SW versions using `--normalize-models` and `--normalize-sw`. Audit trails are preserved showing `Standard(Original)`.
+- **Normalization Engine**: Group equivalent Model names or SW versions using `--normalize-models` and `--normalize-sw`. Audit trails are preserved showing `Standard(Original)`. Now supports **Empty Data Normalization**: map rows with missing data to a standard value by providing an empty alias (e.g., `"Factory SW,,"`).
 - **Auto-Feature Detection**: Dynamically scales comparison logic based on available headers—checks only what it finds.
 - **Performance Optimized**: Uses DuckDB's `QUALIFY` for pre-join deduplication and vectorized set operations for VDN difference extraction, ensuring high speed even on large fleet datasets.
 - **Automated Reporting**: Generates a full suite of reports every run: Full Results (CSV), Mismatches Only (CSV), and Summaries in HTML, Markdown, and TXT.
@@ -13,12 +13,13 @@ A high-performance Python utility for comparing vehicle software versions, model
 - **Incomplete Data Auditing**: Automatically identifies vehicles with missing mandatory information (e.g., missing Model or an empty VDN list) and provides a consolidated breakdown per VIN.
 - **Custom Source Aliasing**: Replace generic "Source 1" and "Source 2" labels with professional names (e.g., "Production" vs "Database") throughout all reports, console logs, and mismatch tallies.
 - **Robust 'NO DATA' Matching**: Correct identifies when both sides are missing data as a MATCH, preventing false positives for empty fields. Also includes a `--skip-nodata` feature to exclude incomplete vehicles entirely.
-- **Data-Grid Optimization**: HTML reports are optimized for wide tables with sticky headers, zebra-striping, and secure, document-ready styling.
+- **Data-Grid Optimization**: HTML reports are optimized for wide tables with sticky headers, zebra-striping, and **Vertical Column Highlighting** for easier navigation of complex rows.
 - **Auditing & Data Integrity**: Includes a dedicated **Auditing Step** that flags duplicate VINs across files, identifies **VDN Prefix Conflicts** (e.g., multiple AT-series VDNs in one file), and catches **Incomplete Rows**.
 - **Unique Vehicle Metrics**: All mismatch tallies and statistics count **unique VINs** (individual vehicles) rather than raw row occurrences, providing accurate fleet-wide diagnostics even with messy input data.
 - **Pairwise VDN Diagnostics**: VDN mismatches are broken down into a **Pairwise Tally** (identifying specific code swaps reach-by-reach) with consolidated statistics for maximum readability.
 - **Automated Filtering**: 
-    - Use `--skip-filter` to drop specific records globally (e.g., Test vehicles) based on column values.
+    - Use `--skip-filter` to drop specific records globally (e.g., Test vehicles) based on column values. **Advanced Logic**: Filters now run *after* normalization, allowing you to skip rows based on their normalized value (e.g., skip all "Factory SW" even if they were originally "No Data").
+    - **Quiet Skip Behavior**: Records excluded by skip filters are treated as a **MATCH (OK)** rather than a mismatch. They still show `SKIPPED` in the data columns for auditing but are hidden from "Mismatch-only" reports to reduce noise.
     - Use `--skip-nodata` to automatically exclude any vehicle that is missing comparison data entirely from either side.
     - Use `--vdn-ignore` to strip specific 4-character codes (e.g., `9T00`, `FALS`) or families of codes using wildcards (e.g., `ME*`) from VDN lists during comparison.
 - **Dynamic Column Augmentation**: Create new virtual columns on the fly by extracting substrings from existing data (e.g., VIN positions) and mapping them to readable values using lookup tables.
@@ -138,7 +139,7 @@ The VDN Compare GUI provides a professional, tabbed interface for managing compl
 - `--use-default-input`: Bypass the file dialog and use default paths in `input/` (`DB.csv` and `PIE.csv`).
 - `--samples`: Number of diagnostic samples to show in reports (integer or `all`, default: `10`).
 - `--sort-vin`: Sort results by VIN (`asc`, `desc`, or `none`, default: `asc`).
-- `--skip-filter`: Values to skip/exclude, in JSON format: `{"ColumnName": ["Value1", "Value2"]}`. Matching rows are dropped for both Source 1 and Source 2.
+- `--skip-filter`: Values to skip/exclude, in JSON format: `{"ColumnName": ["Value1", "Value2"]}`. Filters are aware of **Normalized Values**—if you normalize "No Data" to "Factory SW", you can skip "Factory SW" directly.
 - `--skip-nodata`: (Boolean) Automatically skip rows where any requested comparison column is empty or null (Default: `false`).
 - `--config`: Path to a custom configuration JSON (default: `config.json`).
 - `--compare`: Comparison scope. Options: `sw`, `vdn`, `model`, `region`, `vin`, or `all` (default: `all`). `all` automatically includes every column defined in your `column_map`.
