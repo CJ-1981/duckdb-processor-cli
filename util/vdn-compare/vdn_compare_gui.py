@@ -21,6 +21,11 @@ _bundle_dir = (
 if _bundle_dir not in sys.path:
     sys.path.insert(0, _bundle_dir)
 
+try:
+    from vdn_compare import __version__ as VDN_VERSION  # type: ignore
+except ImportError:
+    VDN_VERSION = "unknown"
+
 # When the GUI spawns itself as a CLI subprocess it sets VDN_NO_PAUSE=1 so
 # that vdn_compare.main() never blocks on input().
 _NO_PAUSE = os.environ.get('VDN_NO_PAUSE', '0') == '1'
@@ -80,7 +85,7 @@ def add_tooltip(widget, text):
 class VDNCompareGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("VDN Compare GUI")
+        self.root.title(f"VDN Compare GUI (v{VDN_VERSION})")
         self.root.geometry("800x900")
 
         # Internal Roles for mapping
